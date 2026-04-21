@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Word, Craft, Us</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Noto+Serif+KR:wght@400;700&family=Noto+Sans+KR:wght@300;400;700&family=Gaegu:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="config.js"></script>
+<style>
+  :root {
+    --bg-base: #0D0D0D;
+    --text-main: #F5F0E8;
+    --text-dim: #8a847a;
+    --mood-primary: #2C3E50;
+    --mood-secondary: #ECF0F1;
+    --font-body: 'Noto Sans KR', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: var(--bg-base);
+    color: var(--text-main);
+    font-family: var(--font-body);
+    overflow: hidden;
+    transition: background 2s ease, font-family 1s ease;
+  }
+  body.with-mood {
+    background: linear-gradient(to bottom, var(--bg-base), color-mix(in srgb, var(--mood-primary) 25%, var(--bg-base)));
+  }
+  .screen {
+    position: fixed; inset: 0;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    padding: 40px;
+  }
+  .screen.active { display: flex; opacity: 1; }
+  .screen.center { align-items: center; justify-content: center; flex-direction: column; }
+
+  h1.title {
+    font-family: 'Playfair Display', 'Noto Serif KR', serif;
+    font-size: 3.2rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-bottom: 2.5rem;
+    text-align: center;
+  }
+  h1.title .comma { color: var(--text-dim); }
+
+  /* --- 시작 화면 --- */
+  .start-form {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 1rem; width: 100%; max-width: 420px;
+  }
+  input[type="password"], input[type="text"] {
+    width: 100%;
+    padding: 12px 16px;
+    background: transparent;
+    border: 1px solid #3a3a3a;
+    color: var(--text-main);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border 0.3s;
+  }
+  input:focus { border-color: var(--text-main); }
+  button {
+    padding: 12px 32px;
+    background: transparent;
+    border: 1px solid var(--text-main);
+    color: var(--text-main);
+    font-family: var(--font-body);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.25s, color 0.25s;
+    letter-spacing: 0.04em;
+  }
+  button:hover:not(:disabled) { background: var(--text-main); color: var(--bg-base); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .error-msg {
+    color: #c88;
+    font-size: 0.85rem;
+    min-height: 1.2em;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .hint {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 0.3rem;
+    text-align: center;
+  }
+  .hint a { color: var(--text-dim); text-decoration: underline; }
+
+  /* --- 매칭 화면 --- */
+  .matching {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.1rem;
+    text-align: center;
+  }
+  .matching .msg { margin-bottom: 1.5rem; }
+  .progress-bar {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.4rem;
+    letter-spacing: 0.1em;
+  }
+  .cursor {
+    display: inline-block;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+
+  /* --- 파트너 등장 --- */
+  .partner-intro {
+    max-width: 640px;
+    text-align: center;
+  }
+  .partner-name-label {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-bottom: 0.7rem;
+    letter-spacing: 0.1em;
+  }
+  .partner-name-big {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.2rem;
+    margin-bottom: 2.5rem;
+  }
+  .partner-first-msg {
+    font-size: 1.1rem;
+    line-height: 1.8;
+    min-height: 150px;
+    margin-bottom: 2.5rem;
+  }
+
+  /* --- 세션 화면 --- */
+  #session-screen {
+    flex-direction: column;
+    padding: 0;
+  }
+  .session-header {
+    padding: 20px 40px 12px;
+    border-bottom: 1px solid #222;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .session-header .partner-label { color: var(--text-main); }
+  .session-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    min-height: 0;
+  }
+  .chat-panel, .world-panel {
+    padding: 30px 40px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .chat-panel { border-right: 1px solid #222; }
+  .world-panel .world-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    margin-bottom: 1.5rem;
+    text-transform: uppercase;
+  }
+  .layer-block {
+    margin-bottom: 1.8rem;
+    padding-bottom: 1.2rem;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  .layer-block:last-child { border-bottom: none; }
+  .layer-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+  .layer-keywords {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 0.7rem;
+    font-style: italic;
+  }
+  .layer-narrative {
+    font-size: 0.98rem;
+    line-height: 1.75;
+  }
+
+  .chat-msg { margin-bottom: 1.2rem; line-height: 1.7; }
+  .chat-msg.partner { padding-left: 0; }
+  .chat-msg.partner .who {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-bottom: 0.3rem;
+  }
+  .chat-msg.partner .text { font-size: 0.98rem; }
+  .chat-msg.me {
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+  .chat-msg.me .text {
+    display: inline-block;
+    padding: 6px 12px;
+    border: 1px solid #2a2a2a;
+  }
+  .typing-indicator {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 1rem;
+  }
+  .typing-indicator .dots::after {
+    content: '.';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0%, 20% { content: ''; }
+    40% { content: '.'; }
+    60% { content: '..'; }
+    80%, 100% { content: '...'; }
+  }
+
+  .input-area {
+    padding: 20px 40px;
+    border-top: 1px solid #222;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .input-area input {
+    flex: 1;
+    padding: 12px 16px;
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: var(--text-main);
+    font-family: var(--font-body);
+    font-size: 1rem;
+    outline: none;
+  }
+  .input-area input:focus { border-color: var(--text-main); }
+  .input-hint {
+    padding: 0 40px 12px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 1em;
+  }
+
+  /* --- 분기 화면 --- */
+  .branch-choices {
+    display: flex;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+  .branch-prompt {
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
+  }
+
+  /* --- 반전 화면 --- */
+  .twist {
+    max-width: 560px;
+    text-align: center;
+    font-size: 1.15rem;
+    line-height: 2;
+  }
+  .twist p { opacity: 0; transition: opacity 1.6s ease; margin-bottom: 1.5rem; }
+  .twist p.shown { opacity: 1; }
+  .twist .emphasis {
+    font-family: 'Playfair Display', 'Noto Serif KR', serif;
+    font-size: 1.3rem;
+  }
+
+  /* --- 공유 카드 --- */
+  #share-screen {
+    overflow-y: auto;
+    display: none;
+  }
+  #share-screen.active {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+  .share-card {
+    background: var(--bg-base);
+    width: 100%;
+    max-width: 600px;
+    padding: 48px 40px;
+    border: 1px solid #2a2a2a;
+    position: relative;
+  }
+  .share-card .card-title {
+    font-family: 'Playfair Display', 'Noto Serif KR', serif;
+    font-size: 1.8rem;
+    text-align: center;
+    margin-bottom: 2.5rem;
+    letter-spacing: 0.03em;
+  }
+  .share-card .card-section { margin-bottom: 1.8rem; }
+  .share-card .card-section .sec-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+  .share-card .card-section .sec-text {
+    font-size: 0.95rem;
+    line-height: 1.7;
+  }
+  .share-card .card-footer {
+    text-align: center;
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #2a2a2a;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+  .share-actions {
+    margin-top: 2rem;
+    display: flex;
+    gap: 1rem;
+  }
+
+  @media (max-width: 700px) {
+    h1.title { font-size: 2.2rem; }
+    .session-body { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+    .chat-panel { border-right: none; border-bottom: 1px solid #222; }
+    .branch-choices { flex-direction: column; width: 100%; max-width: 300px; }
+    .screen { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 시작 화면 -->
+<section id="start-screen" class="screen center active">
+  <h1 class="title">Word<span class="comma">,</span> Craft<span class="comma">,</span> Us</h1>
+  <div class="start-form">
+    <button type="button" id="start-btn">시작하기</button>
+    <div class="error-msg" id="start-error"></div>
+  </div>
+</section>
+
+<!-- 매칭 화면 -->
+<section id="matching-screen" class="screen center">
+  <div class="matching">
+    <div class="msg" id="matching-msg">파트너를 찾는 중<span class="cursor">_</span></div>
+    <div class="progress-bar" id="progress-bar">[░░░░░░░░░░]</div>
+  </div>
+</section>
+
+<!-- 파트너 등장 -->
+<section id="partner-screen" class="screen center">
+  <div class="partner-intro">
+    <div class="partner-name-label">PARTNER</div>
+    <div class="partner-name-big" id="partner-name-big">—</div>
+    <div class="partner-first-msg" id="partner-first-msg"></div>
+    <button id="partner-continue" style="display:none;">시작하기</button>
+  </div>
+</section>
+
+<!-- 세션 화면 -->
+<section id="session-screen" class="screen">
+  <div class="session-header">
+    <div><span class="partner-label" id="session-partner-name">Kai</span> <span id="session-layer-label">— 장소</span></div>
+    <div id="session-progress">1 / 4</div>
+  </div>
+  <div class="session-body">
+    <div class="chat-panel" id="chat-panel"></div>
+    <div class="world-panel" id="world-panel">
+      <div class="world-title">WORLD</div>
+      <div id="world-layers"></div>
+    </div>
+  </div>
+  <div class="input-hint" id="input-hint">단어 1-5개를 쉼표 또는 스페이스로 구분해서 입력하세요.</div>
+  <div class="input-area">
+    <input type="text" id="word-input" placeholder="예: 안개, 등대, 녹슨" autocomplete="off">
+    <button id="send-btn" disabled>전송</button>
+  </div>
+</section>
+
+<!-- 분기 화면 -->
+<section id="branch-screen" class="screen center">
+  <div class="branch-prompt">이 세계를 어떻게 할까요?</div>
+  <div class="branch-choices">
+    <button id="continue-btn">계속 만들기</button>
+    <button id="share-btn">공유하기</button>
+  </div>
+</section>
+
+<!-- 반전 화면 -->
+<section id="twist-screen" class="screen center">
+  <div class="twist">
+    <p id="twist-1">잠깐, 말할 게 있어요.</p>
+    <p id="twist-2" class="emphasis">저는 사람이 아니에요.<br><span id="twist-partner-name">Kai</span>는 AI입니다.</p>
+    <p id="twist-3">그래도 — 이 세계는 진짜예요.<br>당신이 던진 단어들이 만든 세계니까요.</p>
+    <p id="twist-4"><button id="to-share-card">공유 카드 만들기</button></p>
+  </div>
+</section>
+
+<!-- 공유 카드 -->
+<section id="share-screen" class="screen">
+  <div class="share-card" id="share-card">
+    <div class="card-title">Word, Craft, Us</div>
+    <div id="share-sections"></div>
+    <div class="card-footer" id="share-footer">— with Kai</div>
+  </div>
+  <div class="share-actions">
+    <button id="save-image-btn">이미지로 저장</button>
+    <button id="new-world-btn">새 세계 만들기</button>
+  </div>
+</section>
+
+<script>
+'use strict';
+
+// =============== 상수 ===============
+const PARTNER_NAMES = ['Kai', 'Echo', 'Miro', 'Lena', 'Sable', 'Ren'];
+const LAYERS = ['장소', '사람', '사건', '유물'];
+const PARTNER_FIRST_MSG = '안녕하세요. 저도 처음이에요. 우리 같이 세계를 하나 만들어볼까요? 먼저 — 어떤 장소를 만들고 싶어요? 떠오르는 단어를 몇 개 던져줘요.';
+const NEXT_PROMPTS = [
+  '좋아요. 이 장소가 생겼어요. 여기에 누가 살고 있을까요?',
+  '그 사람이 보여요. 이 장소에서 어떤 일이 있었을까요?',
+  '무언가 흔적이 남았을 것 같아요. 이 세계에 남겨진 물건이 있다면요?'
+];
+const FONT_MAP = {
+  serif:   "'Noto Serif KR', serif",
+  mono:    "'JetBrains Mono', monospace",
+  sans:    "'Noto Sans KR', sans-serif",
+  display: "'Gaegu', cursive"
+};
+const STORAGE_KEY = 'wordcraftus_world';
+const TYPEWRITER_SPEED = 15;
+
+// =============== 상태 ===============
+let state = {
+  apiKey: '',
+  partnerName: 'Kai',
+  currentLayerIndex: 0,
+  sessions: [],
+  createdAt: null
+};
+
+// =============== 화면 전환 ===============
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const target = document.getElementById(id);
+  target.classList.add('active');
+}
+
+// =============== 유틸: 타자기 효과 ===============
+function typewriter(el, text, speed = TYPEWRITER_SPEED) {
+  return new Promise(resolve => {
+    el.textContent = '';
+    let i = 0;
+    const tick = () => {
+      if (i < text.length) {
+        el.textContent += text[i++];
+        setTimeout(tick, speed);
+      } else {
+        resolve();
+      }
+    };
+    tick();
+  });
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// =============== 무드 적용 ===============
+function applyMood(mood) {
+  if (!mood) return;
+  const root = document.documentElement;
+  if (mood.primary_color)   root.style.setProperty('--mood-primary', mood.primary_color);
+  if (mood.secondary_color) root.style.setProperty('--mood-secondary', mood.secondary_color);
+  if (mood.font_tone && FONT_MAP[mood.font_tone]) {
+    root.style.setProperty('--font-body', FONT_MAP[mood.font_tone]);
+  }
+  document.body.classList.add('with-mood');
+}
+
+// =============== 시작 화면 ===============
+const startError = document.getElementById('start-error');
+const startBtn = document.getElementById('start-btn');
+
+startBtn.addEventListener('click', async () => {
+  const key = (typeof GEMINI_API_KEY !== 'undefined') ? GEMINI_API_KEY.trim() : '';
+  if (!key || key === 'YOUR_API_KEY_HERE') {
+    startError.textContent = 'config.js에 API 키를 설정해주세요.';
+    return;
+  }
+  startError.textContent = '';
+  startBtn.disabled = true;
+  startBtn.textContent = '확인 중...';
+  const ok = await validateApiKey(key);
+  startBtn.disabled = false;
+  startBtn.textContent = '시작하기';
+  if (!ok) {
+    startError.textContent = '키를 다시 확인해주세요.';
+    return;
+  }
+  state.apiKey = key;
+  await startMatching();
+});
+
+async function validateApiKey(key) {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'ping' }] }],
+          generationConfig: { maxOutputTokens: 5 }
+        })
+      }
+    );
+    return res.ok;
+  } catch (err) {
+    return false;
+  }
+}
+
+// =============== 매칭 화면 ===============
+async function startMatching() {
+  showScreen('matching-screen');
+  const bar = document.getElementById('progress-bar');
+  const msg = document.getElementById('matching-msg');
+  const total = 10;
+  const duration = 2500;
+  for (let i = 1; i <= total; i++) {
+    await sleep(duration / total);
+    bar.textContent = '[' + '█'.repeat(i) + '░'.repeat(total - i) + ']';
+  }
+  msg.innerHTML = '파트너를 찾았습니다.';
+  await sleep(800);
+  await introducePartner();
+}
+
+// =============== 파트너 등장 ===============
+async function introducePartner() {
+  state.partnerName = PARTNER_NAMES[Math.floor(Math.random() * PARTNER_NAMES.length)];
+  state.createdAt = new Date().toISOString();
+  showScreen('partner-screen');
+  document.getElementById('partner-name-big').textContent = state.partnerName;
+  const msgEl = document.getElementById('partner-first-msg');
+  const btn = document.getElementById('partner-continue');
+  btn.style.display = 'none';
+  await sleep(400);
+  await typewriter(msgEl, PARTNER_FIRST_MSG);
+  btn.style.display = 'inline-block';
+}
+
+document.getElementById('partner-continue').addEventListener('click', () => {
+  enterSession(0, /*firstEntry=*/true);
+});
+
+// =============== 세션 화면 ===============
+const chatPanel = document.getElementById('chat-panel');
+const worldLayersEl = document.getElementById('world-layers');
+const wordInput = document.getElementById('word-input');
+const sendBtn = document.getElementById('send-btn');
+const inputHint = document.getElementById('input-hint');
+
+function enterSession(layerIndex, firstEntry) {
+  state.currentLayerIndex = layerIndex;
+  showScreen('session-screen');
+  document.getElementById('session-partner-name').textContent = state.partnerName;
+  document.getElementById('session-layer-label').textContent = '— ' + LAYERS[layerIndex];
+  document.getElementById('session-progress').textContent = `${layerIndex + 1} / 4`;
+
+  if (firstEntry) {
+    chatPanel.innerHTML = '';
+    renderWorld();
+    addPartnerMsg(PARTNER_FIRST_MSG, /*typed=*/false);
+  } else {
+    const prompt = NEXT_PROMPTS[layerIndex - 1];
+    addPartnerMsg(prompt, /*typed=*/true);
+  }
+
+  wordInput.value = '';
+  wordInput.focus();
+  updateSendBtn();
+}
+
+function renderWorld() {
+  worldLayersEl.innerHTML = '';
+  state.sessions.forEach((s) => {
+    const block = document.createElement('div');
+    block.className = 'layer-block';
+    block.innerHTML = `
+      <div class="layer-label">${s.layer}</div>
+      <div class="layer-keywords">${s.keywords.join(' · ')}</div>
+      <div class="layer-narrative"></div>
+    `;
+    block.querySelector('.layer-narrative').textContent = s.narrative;
+    worldLayersEl.appendChild(block);
+  });
+}
+
+function addPartnerMsg(text, typed) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg partner';
+  div.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
+  chatPanel.appendChild(div);
+  const textEl = div.querySelector('.text');
+  if (typed) {
+    typewriter(textEl, text);
+  } else {
+    textEl.textContent = text;
+  }
+  scrollChatToBottom();
+}
+
+function addMyMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg me';
+  const span = document.createElement('span');
+  span.className = 'text';
+  span.textContent = text;
+  div.appendChild(span);
+  chatPanel.appendChild(div);
+  scrollChatToBottom();
+}
+
+function showTypingIndicator() {
+  const div = document.createElement('div');
+  div.className = 'typing-indicator';
+  div.id = 'typing-indicator-active';
+  div.innerHTML = `${state.partnerName}가 입력 중<span class="dots"></span>`;
+  chatPanel.appendChild(div);
+  scrollChatToBottom();
+}
+function removeTypingIndicator() {
+  const el = document.getElementById('typing-indicator-active');
+  if (el) el.remove();
+}
+
+function scrollChatToBottom() {
+  chatPanel.scrollTop = chatPanel.scrollHeight;
+}
+
+function parseWords(raw) {
+  return raw.split(/[,\s]+/).map(w => w.trim()).filter(w => w.length > 0);
+}
+
+function updateSendBtn() {
+  const words = parseWords(wordInput.value);
+  if (words.length === 0) {
+    inputHint.textContent = '단어 1-5개를 쉼표 또는 스페이스로 구분해서 입력하세요.';
+    sendBtn.disabled = true;
+  } else if (words.length > 5) {
+    inputHint.textContent = '단어는 5개까지만 입력할 수 있어요.';
+    sendBtn.disabled = true;
+  } else {
+    inputHint.textContent = `${words.length}개의 단어 · Enter로 전송`;
+    sendBtn.disabled = false;
+  }
+}
+
+wordInput.addEventListener('input', updateSendBtn);
+wordInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !sendBtn.disabled) {
+    e.preventDefault();
+    submitWords();
+  }
+});
+sendBtn.addEventListener('click', submitWords);
+
+async function submitWords() {
+  const words = parseWords(wordInput.value);
+  if (words.length < 1 || words.length > 5) return;
+
+  sendBtn.disabled = true;
+  wordInput.disabled = true;
+  addMyMsg(words.join(', '));
+  wordInput.value = '';
+  inputHint.textContent = '';
+
+  showTypingIndicator();
+
+  const layer = LAYERS[state.currentLayerIndex];
+  const result = await callGemini(layer, words);
+  removeTypingIndicator();
+
+  if (!result) {
+    const retryDiv = document.createElement('div');
+    retryDiv.className = 'chat-msg partner';
+    retryDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text">${state.partnerName}가 잠시 응답하지 않아요. 다시 시도해볼게요.</div>`;
+    chatPanel.appendChild(retryDiv);
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = '다시 시도';
+    retryBtn.style.marginLeft = '0';
+    retryBtn.style.marginTop = '0.5rem';
+    retryDiv.appendChild(retryBtn);
+    retryBtn.addEventListener('click', () => {
+      retryDiv.remove();
+      wordInput.value = words.join(', ');
+      wordInput.disabled = false;
+      updateSendBtn();
+      wordInput.focus();
+    });
+    wordInput.disabled = false;
+    return;
+  }
+
+  applyMood(result.mood);
+  state.sessions.push({
+    layer,
+    keywords: words,
+    narrative: result.narrative,
+    mood: result.mood
+  });
+  saveWorld();
+
+  const narrativeDiv = document.createElement('div');
+  narrativeDiv.className = 'chat-msg partner';
+  narrativeDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
+  chatPanel.appendChild(narrativeDiv);
+  scrollChatToBottom();
+  await typewriter(narrativeDiv.querySelector('.text'), result.narrative);
+
+  await sleep(400);
+  addPartnerMsg(result.partner_message, /*typed=*/true);
+  renderWorld();
+
+  await sleep(1500 + result.partner_message.length * TYPEWRITER_SPEED);
+  goToBranch();
+}
+
+function goToBranch() {
+  showScreen('branch-screen');
+  const continueBtn = document.getElementById('continue-btn');
+  if (state.currentLayerIndex >= LAYERS.length - 1) {
+    continueBtn.style.display = 'none';
+  } else {
+    continueBtn.style.display = 'inline-block';
+  }
+}
+
+document.getElementById('continue-btn').addEventListener('click', () => {
+  const next = state.currentLayerIndex + 1;
+  if (next < LAYERS.length) {
+    wordInput.disabled = false;
+    enterSession(next, /*firstEntry=*/false);
+  }
+});
+document.getElementById('share-btn').addEventListener('click', () => {
+  showTwist();
+});
+
+// =============== Gemini API ===============
+async function callGemini(layer, words) {
+  const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
+  const prompt = `You are ${state.partnerName}, a creative writing partner helping a user build a fictional world together.
+The user is building a world layer by layer: Place → Person → Event → Relic.
+
+Current world context:
+${priorNarratives || '(none yet — this is the first layer)'}
+
+Current layer: ${layer}
+User's keywords: ${words.join(', ')}
+
+Respond ONLY in JSON format with this exact structure:
+{
+  "narrative": "2-4 sentences describing this layer in Korean, poetic and immersive",
+  "partner_message": "One sentence from ${state.partnerName} to the player in Korean, warm and curious tone",
+  "mood": {
+    "primary_color": "hex color that fits the narrative atmosphere",
+    "secondary_color": "contrasting hex color for text/accents",
+    "font_tone": "serif | mono | sans | display",
+    "keywords": ["분위기 키워드1", "키워드2", "키워드3"]
+  }
+}
+Do not include any text outside the JSON.`;
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${state.apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        })
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return null;
+    const parsed = JSON.parse(text);
+    if (!parsed.narrative || !parsed.partner_message || !parsed.mood) return null;
+    return parsed;
+  } catch (err) {
+    console.error('Gemini call failed:', err);
+    return null;
+  }
+}
+
+// =============== 반전 화면 ===============
+async function showTwist() {
+  showScreen('twist-screen');
+  document.getElementById('twist-partner-name').textContent = state.partnerName;
+  const ps = ['twist-1', 'twist-2', 'twist-3', 'twist-4'].map(id => document.getElementById(id));
+  ps.forEach(p => p.classList.remove('shown'));
+  for (const p of ps) {
+    await sleep(1400);
+    p.classList.add('shown');
+  }
+}
+
+document.getElementById('to-share-card').addEventListener('click', () => {
+  renderShareCard();
+  showScreen('share-screen');
+});
+
+// =============== 공유 카드 ===============
+function renderShareCard() {
+  const secEl = document.getElementById('share-sections');
+  secEl.innerHTML = '';
+  state.sessions.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'card-section';
+    div.innerHTML = `<div class="sec-label">${s.layer}</div><div class="sec-text"></div>`;
+    div.querySelector('.sec-text').textContent = s.narrative;
+    secEl.appendChild(div);
+  });
+  document.getElementById('share-footer').textContent = `— ${state.partnerName}와 함께 만든 세계`;
+
+  const lastMood = state.sessions[state.sessions.length - 1]?.mood;
+  if (lastMood) applyMood(lastMood);
+}
+
+document.getElementById('save-image-btn').addEventListener('click', async () => {
+  const card = document.getElementById('share-card');
+  const btn = document.getElementById('save-image-btn');
+  btn.disabled = true;
+  btn.textContent = '생성 중...';
+  try {
+    const canvas = await html2canvas(card, {
+      backgroundColor: getComputedStyle(document.body).backgroundColor,
+      scale: 2
+    });
+    const link = document.createElement('a');
+    link.download = `wordcraftus_${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch (err) {
+    console.error(err);
+    alert('이미지 저장에 실패했습니다.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '이미지로 저장';
+  }
+});
+
+document.getElementById('new-world-btn').addEventListener('click', () => {
+  localStorage.removeItem(STORAGE_KEY);
+  state = {
+    apiKey: state.apiKey,
+    partnerName: 'Kai',
+    currentLayerIndex: 0,
+    sessions: [],
+    createdAt: null
+  };
+  document.body.classList.remove('with-mood');
+  document.documentElement.style.setProperty('--mood-primary', '#2C3E50');
+  document.documentElement.style.setProperty('--font-body', "'Noto Sans KR', sans-serif");
+  startMatching();
+});
+
+// =============== localStorage ===============
+function saveWorld() {
+  const data = {
+    partnerName: state.partnerName,
+    sessions: state.sessions,
+    createdAt: state.createdAt
+  };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (err) {
+    console.warn('localStorage save failed', err);
+  }
+}
+
+// =============== 초기화 ===============
+(function init() {
+  if (typeof GEMINI_API_KEY === 'undefined') {
+    startError.textContent = 'config.js 파일을 찾을 수 없습니다. config.example.js를 복사해 만들어주세요.';
+    startBtn.disabled = true;
+  } else if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_API_KEY_HERE') {
+    startError.textContent = 'config.js에 API 키를 설정해주세요.';
+  }
+})();
+</script>
+</body>
+</html>
