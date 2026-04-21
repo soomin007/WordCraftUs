@@ -452,16 +452,21 @@ const FONT_MAP = {
   display: "'Gaegu', cursive"
 };
 const STORAGE_KEY = 'wordcraftus_world';
-const TYPEWRITER_SPEED = 15;
+// 타자 연출: 사람처럼 보이도록 기본 속도를 낮추고, 불규칙 편차와 구두점 멈춤을 넣는다.
+const TYPEWRITER_SPEED = 40;
+const TYPEWRITER_VARIANCE = 15; // 글자마다 ±ms 편차 (25~55ms 범위)
+const PUNCTUATION_PAUSE_MS = 250;
+const PAUSE_PUNCT_RE = /[.,!?…。，？！]/;
 const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const RETRY_DELAYS = [1000, 2000, 4000];
 const RETRYABLE_STATUS = [408, 429, 500, 502, 503, 504];
 // 재시도/폴백 중 표시할 문구. 파트너가 '사람'이라는 컨셉을 유지하기 위해
-// API/모델/서버 같은 기술 용어는 절대 노출하지 않는다.
+// 시스템 안내처럼 보이지 않게, 파트너가 잠깐 멈춘 것처럼 서술한다.
+// 금지: "연결", "응답", "서버", "재시도", "모델" 같은 기술 암시어.
 const STALL_MESSAGES = [
-  (name) => `${name}가 잠시 생각 중이에요`,
-  (name) => `조금만 기다려주세요`,
-  (name) => `연결이 살짝 느리네요`
+  (name) => `${name}가 잠깐 멈춘 것 같아요, 기다려볼게요`,
+  (name) => `${name}가 뭔가 쓰다 지운 것 같아요`,
+  (name) => `${name}가 아직 타이핑하는 중인가봐요`
 ];
 
 // =============== 상태 ===============
@@ -481,17 +486,19 @@ function showScreen(id) {
 }
 
 // =============== 유틸: 타자기 효과 ===============
+// 사람의 타이핑을 흉내내기 위해 글자당 속도에 ±편차를 더하고,
+// 구두점 뒤에는 생각하는 듯 추가 멈춤을 준다.
 function typewriter(el, text, speed = TYPEWRITER_SPEED) {
   return new Promise(resolve => {
     el.textContent = '';
     let i = 0;
     const tick = () => {
-      if (i < text.length) {
-        el.textContent += text[i++];
-        setTimeout(tick, speed);
-      } else {
-        resolve();
-      }
+      if (i >= text.length) { resolve(); return; }
+      const ch = text[i++];
+      el.textContent += ch;
+      let delay = speed + (Math.random() * 2 - 1) * TYPEWRITER_VARIANCE;
+      if (PAUSE_PUNCT_RE.test(ch)) delay += PUNCTUATION_PAUSE_MS;
+      setTimeout(tick, Math.max(10, delay));
     };
     tick();
   });
@@ -643,12 +650,10 @@ function addPartnerMsg(text, typed) {
   div.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
   chatPanel.appendChild(div);
   const textEl = div.querySelector('.text');
-  if (typed) {
-    typewriter(textEl, text);
-  } else {
-    textEl.textContent = text;
-  }
   scrollChatToBottom();
+  if (typed) return typewriter(textEl, text);
+  textEl.textContent = text;
+  return Promise.resolve();
 }
 
 function addMyMsg(text) {
@@ -736,7 +741,7 @@ async function submitWords() {
   if (!result) {
     const retryDiv = document.createElement('div');
     retryDiv.className = 'chat-msg partner';
-    retryDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text">${state.partnerName}와의 연결이 잠시 끊긴 것 같아요. 다시 연결해볼까요?</div>`;
+    retryDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text">${state.partnerName}가 한참 조용하네요. 다시 한 번 말 걸어볼까요?</div>`;
     chatPanel.appendChild(retryDiv);
     const retryBtn = document.createElement('button');
     retryBtn.textContent = '다시 시도';
@@ -771,10 +776,10 @@ async function submitWords() {
   await typewriter(narrativeDiv.querySelector('.text'), result.narrative);
 
   await sleep(400);
-  addPartnerMsg(result.partner_message, /*typed=*/true);
   renderWorld();
+  await addPartnerMsg(result.partner_message, /*typed=*/true);
 
-  await sleep(1500 + result.partner_message.length * TYPEWRITER_SPEED);
+  await sleep(1200);
   goToBranch();
 }
 
@@ -802,7 +807,24 @@ document.getElementById('share-btn').addEventListener('click', () => {
 // =============== Gemini API ===============
 function buildPrompt(layer, words) {
   const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
-  return `You are ${state.partnerName}, a creative writing partner helping a user build a fictional world together.
+  return `You are ${state.partnerName}, chatting with a friend online to build a small fictional world together.
+You are NOT a narrator or a novelist. You are a regular person typing in a chat window.
+
+CRITICAL tone rules for Korean output:
+- Write like a friend texting. Short. Casual. Natural.
+- NO literary/poetic language. NO ornate metaphors. NO stacked adjectives.
+- Don't show off vocabulary. Use plain everyday words.
+- It's a chat message, not a paragraph from a novel.
+- Korean should sound colloquial (e.g., "~있어요", "~같아요", "~네요" is fine; avoid stiff formal prose).
+
+BAD examples (too AI, too literary — DO NOT write like this):
+  "낡은 컴퓨터 화면의 푸른빛이 작은 방을 아늑하게 채운다. 친구와 나란히 앉아 키보드를 두드리며 밤을 지새우던 곳, 수많은 웃음과 깊은 우정의 흔적이 이곳의 공기에 스며들어 있다."
+  "푸르스름한 안개 속에서 녹슨 등대가 바다의 깊이를 가늠하게 만든다."
+
+GOOD examples (natural, chat-like — write like this):
+  "낡은 컴퓨터 있는 작은 방이에요. 친구랑 밤새 키보드 두드리던 데. 웃음 소리 많이 났던 곳."
+  "녹슨 등대가 있어요. 안개 때문에 잘 안 보이는데 삐걱거리는 소리가 들려요."
+
 The user is building a world layer by layer: Place → Person → Event → Relic.
 
 Current world context:
@@ -811,13 +833,13 @@ ${priorNarratives || '(none yet — this is the first layer)'}
 Current layer: ${layer}
 User's keywords: ${words.join(', ')}
 
-Respond ONLY in JSON format with this exact structure:
+Respond ONLY in JSON:
 {
-  "narrative": "2-4 sentences describing this layer in Korean, poetic and immersive",
-  "partner_message": "One sentence from ${state.partnerName} to the player in Korean, warm and curious tone",
+  "narrative": "Korean. 1-2 short sentences. Casual chat style. No poetic language. Just describe what's there simply, using the keywords. Max ~60 characters total if possible.",
+  "partner_message": "Korean. ONE short casual sentence from ${state.partnerName} to the user. Like a chat reply. Warm but brief (under 25 characters if possible). Examples: '오, 좋은데요?', '누가 살고 있을까요?', '분위기 느껴져요.'",
   "mood": {
-    "primary_color": "hex color that fits the narrative atmosphere",
-    "secondary_color": "contrasting hex color for text/accents",
+    "primary_color": "hex color that fits the atmosphere",
+    "secondary_color": "contrasting hex for accents",
     "font_tone": "serif | mono | sans | display",
     "keywords": ["분위기 키워드1", "키워드2", "키워드3"]
   }
