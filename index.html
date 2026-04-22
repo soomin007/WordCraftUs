@@ -272,6 +272,15 @@
     font-size: 0.95rem;
     color: var(--text-main);
   }
+  .chat-msg.partner.sentence .text {
+    display: block;
+    padding: 0;
+    border: none;
+    font-family: var(--font-body);
+    font-size: 0.98rem;
+    line-height: 1.7;
+    color: var(--text-main);
+  }
   .chat-msg.me {
     text-align: right;
     color: var(--text-dim);
@@ -282,6 +291,21 @@
     padding: 6px 12px;
     border: 1px solid #2a2a2a;
     font-family: 'JetBrains Mono', monospace;
+  }
+  .chat-msg.system {
+    text-align: center;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin: 1.4rem 0;
+  }
+  .chat-msg.system .sys-inner {
+    display: inline-block;
+    padding: 6px 18px;
+    border-top: 1px solid #2a2a2a;
+    border-bottom: 1px solid #2a2a2a;
   }
   .typing-indicator {
     color: var(--text-dim);
@@ -455,6 +479,14 @@
   </div>
 </section>
 
+<!-- 프로필 전송 로딩 화면 -->
+<section id="sending-screen" class="screen center">
+  <div class="matching">
+    <div class="msg">프로필을 보내는 중<span class="cursor">_</span></div>
+    <div class="progress-bar" id="sending-progress">[░░░░░░░░░░]</div>
+  </div>
+</section>
+
 <!-- 규칙 안내 화면 -->
 <section id="rules-screen" class="screen center">
   <div class="rules-box">
@@ -566,7 +598,7 @@ const PERSONA_TYPING = {
   Lena:  40,
   Ren:   30
 };
-const FALLBACK_GREETING_WORDS = ['안녕', '시작해볼까요'];
+const FALLBACK_GREETING = '잠깐 이야기하다가 세계 만들어볼까요';
 const FONT_MAP = {
   serif:   "'Noto Serif KR', serif",
   mono:    "'JetBrains Mono', monospace",
@@ -596,7 +628,7 @@ let state = {
   apiKey: '',
   partnerName: 'Kai',
   playerProfile: { name: '익명', intro: '' },
-  firstGreetingWords: [],
+  firstGreeting: '',
   currentLayerIndex: 0,
   sessions: [],
   createdAt: null
@@ -725,11 +757,27 @@ const introNameInput = document.getElementById('intro-name');
 const introTextInput = document.getElementById('intro-text');
 const introDoneBtn = document.getElementById('intro-done');
 
-function finishIntro() {
+async function finishIntro() {
   const name = introNameInput.value.trim() || '익명';
   const intro = introTextInput.value.trim();
   state.playerProfile = { name, intro };
+  await playSendingProfile();
   showScreen('rules-screen');
+}
+
+// 프로필 '서버 전송' 흉내. 실제 네트워크 호출은 없지만, 규칙 화면이 불쑥 뜨지 않고
+// 플레이어 입력이 어딘가로 보내지는 흐름감을 준다.
+async function playSendingProfile() {
+  showScreen('sending-screen');
+  const bar = document.getElementById('sending-progress');
+  bar.textContent = '[░░░░░░░░░░]';
+  const total = 10;
+  const duration = 1600;
+  for (let i = 1; i <= total; i++) {
+    await sleep(duration / total);
+    bar.textContent = '[' + '█'.repeat(i) + '░'.repeat(total - i) + ']';
+  }
+  await sleep(500);
 }
 
 introDoneBtn.addEventListener('click', finishIntro);
@@ -800,15 +848,15 @@ async function introducePartner() {
   msgEl.innerHTML = `<span style="color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;">${state.partnerName}가 입력 중<span class="dots-inline"></span></span>`;
   await sleep(400);
 
-  const words = await fetchGreeting();
-  state.firstGreetingWords = (words && words.length) ? words : FALLBACK_GREETING_WORDS;
+  const greeting = await fetchGreeting();
+  state.firstGreeting = greeting || FALLBACK_GREETING;
 
   msgEl.innerHTML = '';
-  await typewriter(msgEl, formatWordList(state.firstGreetingWords));
+  await typewriter(msgEl, state.firstGreeting);
   btn.style.display = 'inline-block';
 }
 
-// 단어 배열을 화면에 표시할 때의 공통 포맷: ["단어1", "단어2"] 형태.
+// 단어 배열을 채팅 말풍선에 출력할 때의 공통 포맷: ["단어1", "단어2"] 형태.
 function formatWordList(words) {
   return '[' + words.map(w => `"${w}"`).join(', ') + ']';
 }
@@ -834,11 +882,11 @@ function enterSession(layerIndex, firstEntry) {
   if (firstEntry) {
     chatPanel.innerHTML = '';
     renderWorld();
-    const initialWords = state.firstGreetingWords.length ? state.firstGreetingWords : FALLBACK_GREETING_WORDS;
-    addPartnerWords(initialWords, /*typed=*/false);
+    // 파트너의 첫 인사만 문장으로 — 단어 규칙은 규칙 화면을 본 이후, 세계 만들기가 시작된 뒤부터 적용된다.
+    const initialGreeting = state.firstGreeting || FALLBACK_GREETING;
+    addPartnerSentence(initialGreeting, /*typed=*/false);
   }
   // 2~4번째 레이어에서는 파트너가 먼저 말 걸지 않는다 — 플레이어 단어 입력이 다음 레이어의 시작점.
-  // (이전엔 NEXT_PROMPTS 고정 문장으로 유도했지만 '단어로만 소통' 규칙과 맞지 않아 제거)
 
   wordInput.value = '';
   wordInput.focus();
@@ -858,6 +906,19 @@ function renderWorld() {
     block.querySelector('.layer-narrative').textContent = s.narrative;
     worldLayersEl.appendChild(block);
   });
+}
+
+// 파트너 첫 인사처럼 단어가 아닌 문장으로 나오는 경우. 테두리 없이 본문 폰트로 출력.
+function addPartnerSentence(text, typed) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg partner sentence';
+  div.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
+  chatPanel.appendChild(div);
+  const textEl = div.querySelector('.text');
+  scrollChatToBottom();
+  if (typed) return typewriter(textEl, text);
+  textEl.textContent = text;
+  return Promise.resolve();
 }
 
 // 단어 배열을 파트너 말풍선으로 출력. 말풍선은 플레이어 입력과 같은 스타일이되 좌측 정렬.
@@ -880,6 +941,18 @@ function addMyWords(words) {
   const span = document.createElement('span');
   span.className = 'text';
   span.textContent = formatWordList(words);
+  div.appendChild(span);
+  chatPanel.appendChild(div);
+  scrollChatToBottom();
+}
+
+// 대화 흐름과 분리된 시스템 알림 (세션 경계 등). 파트너의 말이 아니라 화면 중앙의 고지선.
+function addSystemMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg system';
+  const span = document.createElement('span');
+  span.className = 'sys-inner';
+  span.textContent = text;
   div.appendChild(span);
   chatPanel.appendChild(div);
   scrollChatToBottom();
@@ -1006,8 +1079,9 @@ async function showSessionEndChoice() {
   hintEl.style.display = 'none';
 
   const isLast = state.currentLayerIndex >= LAYERS.length - 1;
-  const promptWords = isLast ? ['다', '만들었네요'] : ['계속', '할까요'];
-  await addPartnerWords(promptWords, /*typed=*/true);
+  const promptText = isLast ? '다 만들었어요' : '계속할까요?';
+  addSystemMsg(promptText);
+  await sleep(300);
 
   const existing = document.getElementById('session-end-choice');
   if (existing) existing.remove();
@@ -1046,22 +1120,24 @@ function buildGreetingPrompt() {
     ? `상대방의 이름: ${p.name}. 한 줄 소개: "${p.intro}". 자연스럽다면 슬쩍 받아도 되지만, 억지로 엮지 말 것.`
     : `상대방의 이름: ${p.name}. (소개는 비어 있음)`;
   return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들려고 해요.
-이 공간의 규칙: 단어로만 소통합니다. 문장은 절대 사용하지 않습니다.
+세계 만들기가 시작되면 단어로만 소통하지만, 지금은 아직 시작 전 — 그냥 첫 인사를 건네는 순간입니다.
 
 ${introLine}
 
 말투 가이드: ${tone}
 
-지금 상대에게 보낼 첫 인사를 단어로만 만들어주세요.
+상대에게 건넬 첫 채팅 메시지를 한 문장(최대 두 문장)으로 써주세요.
 
-greeting_words 작성 규칙:
-- 반드시 단어 2~4개. 문장 금지, 조사 붙은 긴 구절 금지.
-- 낯선 사람과의 짧은 인사 느낌.
-- 좋은 예: ["안녕", "뭐부터"] / ["반가워요", "시작해요"] / ["오늘", "이상한", "기분"]
-- 나쁜 예: ["안녕하세요 반갑습니다", "같이 만들어봐요"] ← 문장·설명
+규칙:
+- 한국어 구어체. 낯선 사람에게 처음 말 거는 톤.
+- 정형 인사 금지: "안녕하세요", "반갑습니다", "저도 처음이에요", ":)", "!!".
+- 자기 이름 소개 금지(이미 화면에 보임).
+- 게임을 설명하거나 "같이 만들어봐요" 같은 표현 금지.
+- 좋은 예: "어떤 세계 좋아해요?" / "뭔가 이상한 데 가고 싶은 날이에요" / "오늘 기분이 어때요, 세계 만들기 전에"
+- 나쁜 예: "안녕하세요! 저도 처음이에요 :)" / "반갑습니다. 함께 세계를 만들어봐요"
 
 JSON으로만 답하세요. 다른 텍스트 금지.
-{ "greeting_words": ["단어1", "단어2"] }`;
+{ "greeting": "한 문장" }`;
 }
 
 async function tryJsonOnce(model, prompt, requiredKeys) {
@@ -1093,15 +1169,15 @@ async function tryJsonOnce(model, prompt, requiredKeys) {
   }
 }
 
-// 첫 인사는 실패 시 FALLBACK_GREETING_WORDS로 대체하므로 조용히 실패해도 된다.
+// 첫 인사는 실패 시 FALLBACK_GREETING으로 대체하므로 조용히 실패해도 된다.
 async function fetchGreeting() {
   const prompt = buildGreetingPrompt();
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryJsonOnce(model, prompt, ['greeting_words']);
-      if (result.ok && Array.isArray(result.data.greeting_words) && result.data.greeting_words.length) {
-        return result.data.greeting_words;
+      const result = await tryJsonOnce(model, prompt, ['greeting']);
+      if (result.ok && typeof result.data.greeting === 'string' && result.data.greeting.trim()) {
+        return result.data.greeting.trim();
       }
       if (!result.retryable) return null;
       if (attempt < maxAttempts - 1) {
@@ -1264,7 +1340,6 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
     partnerName: 'Kai',
     playerProfile: state.playerProfile || { name: '익명', intro: '' },
     firstGreeting: '',
-    firstGreetingWords: [],
     currentLayerIndex: 0,
     sessions: [],
     createdAt: null
