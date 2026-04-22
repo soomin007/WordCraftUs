@@ -36,9 +36,33 @@
     opacity: 0;
     transition: opacity 0.6s ease;
     padding: 40px;
+    z-index: 1;
   }
   .screen.active { display: flex; opacity: 1; }
   .screen.center { align-items: center; justify-content: center; flex-direction: column; }
+
+  /* --- ASCII 배경 --- */
+  #ascii-bg-container {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    background: transparent;
+  }
+  .ascii-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: pre;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.05;
+    opacity: 0;
+    transition: opacity 2s ease, color 2s ease;
+    user-select: none;
+  }
 
   h1.title {
     font-family: 'Playfair Display', 'Noto Serif KR', serif;
@@ -93,6 +117,34 @@
     text-align: center;
   }
   .hint a { color: var(--text-dim); text-decoration: underline; }
+
+  /* --- 규칙 안내 화면 --- */
+  .rules-box {
+    max-width: 520px;
+    width: 100%;
+    border: 1px solid #2a2a2a;
+    padding: 32px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+  .rules-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+  }
+  .rules-body {
+    white-space: pre-wrap;
+    font-size: 0.98rem;
+    line-height: 1.75;
+  }
+  .rules-question {
+    font-family: 'Playfair Display', 'Noto Serif KR', serif;
+    font-size: 1.15rem;
+    margin-top: 0.4rem;
+  }
+  .rules-box button { align-self: flex-start; }
 
   /* --- 매칭 화면 --- */
   .matching {
@@ -166,8 +218,11 @@
     padding: 30px 40px;
     overflow-y: auto;
     min-height: 0;
+    position: relative;
+    z-index: 1;
   }
-  .chat-panel { border-right: 1px solid #222; }
+  .chat-panel { border-right: 1px solid #222; background: rgba(13, 13, 13, 0.85); }
+  .world-panel { background: rgba(13, 13, 13, 0.60); }
   .world-panel .world-title {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.8rem;
@@ -209,7 +264,14 @@
     font-size: 0.8rem;
     margin-bottom: 0.3rem;
   }
-  .chat-msg.partner .text { font-size: 0.98rem; }
+  .chat-msg.partner .text {
+    display: inline-block;
+    padding: 6px 12px;
+    border: 1px solid #2a2a2a;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
+    color: var(--text-main);
+  }
   .chat-msg.me {
     text-align: right;
     color: var(--text-dim);
@@ -219,6 +281,7 @@
     display: inline-block;
     padding: 6px 12px;
     border: 1px solid #2a2a2a;
+    font-family: 'JetBrains Mono', monospace;
   }
   .typing-indicator {
     color: var(--text-dim);
@@ -370,6 +433,9 @@
 </head>
 <body>
 
+<!-- ASCII 배경: 세션마다 새 레이어가 위에 쌓여 누적된다 -->
+<div id="ascii-bg-container" aria-hidden="true"></div>
+
 <!-- 시작 화면 -->
 <section id="start-screen" class="screen center active">
   <h1 class="title">Word<span class="comma">,</span> Craft<span class="comma">,</span> Us</h1>
@@ -386,6 +452,24 @@
     <input type="text" id="intro-name" placeholder="이름 또는 별명" maxlength="10" autocomplete="off">
     <input type="text" id="intro-text" placeholder="어떤 세계를 좋아하나요?" maxlength="40" autocomplete="off">
     <button id="intro-done">완료</button>
+  </div>
+</section>
+
+<!-- 규칙 안내 화면 -->
+<section id="rules-screen" class="screen center">
+  <div class="rules-box">
+    <div class="rules-label">NOTICE</div>
+    <div class="rules-body">이 공간에서는 단어로만 소통합니다.
+한 번에 최대 다섯 단어. 그게 규칙이에요.
+
+오늘 만들 세계의 순서:
+  장소 → 사람 → 사건 → 유물
+
+각 단계에서 파트너와 단어를 주고받으며
+세계의 레이어를 하나씩 완성합니다.
+마음에 들면 다음 단계로, 다 만들었으면 공유할 수 있어요.</div>
+    <div class="rules-question">준비되셨나요?</div>
+    <button id="rules-done">준비됐어요</button>
   </div>
 </section>
 
@@ -482,12 +566,7 @@ const PERSONA_TYPING = {
   Lena:  40,
   Ren:   30
 };
-const FALLBACK_GREETING = '어떤 세계 좋아해요?';
-const NEXT_PROMPTS = [
-  '좋아요. 이 장소가 생겼어요. 여기에 누가 살고 있을까요?',
-  '그 사람이 보여요. 이 장소에서 어떤 일이 있었을까요?',
-  '무언가 흔적이 남았을 것 같아요. 이 세계에 남겨진 물건이 있다면요?'
-];
+const FALLBACK_GREETING_WORDS = ['안녕', '시작해볼까요'];
 const FONT_MAP = {
   serif:   "'Noto Serif KR', serif",
   mono:    "'JetBrains Mono', monospace",
@@ -500,7 +579,7 @@ const TYPEWRITER_SPEED = 40;
 const TYPEWRITER_VARIANCE = 15; // 글자마다 ±ms 편차 (25~55ms 범위)
 const PUNCTUATION_PAUSE_MS = 250;
 const PAUSE_PUNCT_RE = /[.,!?…。，？！]/;
-const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+const MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 const RETRY_DELAYS = [1000, 2000, 4000];
 const RETRYABLE_STATUS = [408, 429, 500, 502, 503, 504];
 // 재시도/폴백 중 표시할 문구. 파트너가 '사람'이라는 컨셉을 유지하기 위해
@@ -517,7 +596,7 @@ let state = {
   apiKey: '',
   partnerName: 'Kai',
   playerProfile: { name: '익명', intro: '' },
-  firstGreeting: '',
+  firstGreetingWords: [],
   currentLayerIndex: 0,
   sessions: [],
   createdAt: null
@@ -553,6 +632,56 @@ function typewriter(el, text, speed) {
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
+
+// =============== ASCII 배경 ===============
+// 세션마다 새 레이어를 쌓는다. 이전 레이어는 희미해지고, 최신 레이어가 1.0으로 가장 진하게 보인다.
+const ASCII_ROWS = 15;
+const ASCII_COLS = 30;
+
+// 모노스페이스 폰트의 글자 너비 대비 폰트 사이즈 비율(대략 0.6). 화면을 꽉 채우는 최대값을 고른다.
+function asciiFontSizePx() {
+  const fromWidth = (window.innerWidth / ASCII_COLS) / 0.6;
+  const fromHeight = window.innerHeight / ASCII_ROWS;
+  return Math.floor(Math.min(fromWidth, fromHeight));
+}
+
+function updateAsciiLayoutAll() {
+  const size = asciiFontSizePx();
+  document.querySelectorAll('.ascii-layer').forEach(layer => {
+    layer.style.fontSize = size + 'px';
+  });
+}
+
+// 최신 레이어는 1.0, 바로 이전 0.35, 그 이전 0.2, 그 이전 0.1... 점차 옅어진다.
+function updateAsciiOpacities() {
+  const layers = document.querySelectorAll('#ascii-bg-container .ascii-layer');
+  const total = layers.length;
+  layers.forEach((layer, i) => {
+    const fromNewest = total - 1 - i;
+    let opacity;
+    if (fromNewest === 0) opacity = 1;
+    else if (fromNewest === 1) opacity = 0.35;
+    else if (fromNewest === 2) opacity = 0.2;
+    else opacity = 0.1;
+    layer.style.opacity = opacity.toString();
+  });
+}
+
+function addAsciiLayer(art, mood) {
+  const container = document.getElementById('ascii-bg-container');
+  if (!container) return;
+  const layer = document.createElement('div');
+  layer.className = 'ascii-layer';
+  layer.style.fontSize = asciiFontSizePx() + 'px';
+  layer.style.color = mood?.primary_color || 'var(--mood-primary)';
+  layer.textContent = art;
+  layer.style.opacity = '0';
+  container.appendChild(layer);
+  // 페이드인: 다음 프레임에 목표 opacity를 부여해 2s 트랜지션이 타도록.
+  requestAnimationFrame(() => requestAnimationFrame(() => updateAsciiOpacities()));
+}
+
+window.addEventListener('resize', updateAsciiLayoutAll);
 
 // =============== 무드 적용 ===============
 function applyMood(mood) {
@@ -600,7 +729,7 @@ function finishIntro() {
   const name = introNameInput.value.trim() || '익명';
   const intro = introTextInput.value.trim();
   state.playerProfile = { name, intro };
-  startMatching();
+  showScreen('rules-screen');
 }
 
 introDoneBtn.addEventListener('click', finishIntro);
@@ -611,6 +740,11 @@ introDoneBtn.addEventListener('click', finishIntro);
       finishIntro();
     }
   });
+});
+
+// =============== 규칙 안내 화면 ===============
+document.getElementById('rules-done').addEventListener('click', () => {
+  startMatching();
 });
 
 async function validateApiKey(key) {
@@ -666,12 +800,17 @@ async function introducePartner() {
   msgEl.innerHTML = `<span style="color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;">${state.partnerName}가 입력 중<span class="dots-inline"></span></span>`;
   await sleep(400);
 
-  const greeting = await fetchGreeting();
-  state.firstGreeting = greeting || FALLBACK_GREETING;
+  const words = await fetchGreeting();
+  state.firstGreetingWords = (words && words.length) ? words : FALLBACK_GREETING_WORDS;
 
   msgEl.innerHTML = '';
-  await typewriter(msgEl, state.firstGreeting);
+  await typewriter(msgEl, formatWordList(state.firstGreetingWords));
   btn.style.display = 'inline-block';
+}
+
+// 단어 배열을 화면에 표시할 때의 공통 포맷: ["단어1", "단어2"] 형태.
+function formatWordList(words) {
+  return '[' + words.map(w => `"${w}"`).join(', ') + ']';
 }
 
 document.getElementById('partner-continue').addEventListener('click', () => {
@@ -695,11 +834,11 @@ function enterSession(layerIndex, firstEntry) {
   if (firstEntry) {
     chatPanel.innerHTML = '';
     renderWorld();
-    addPartnerMsg(state.firstGreeting || FALLBACK_GREETING, /*typed=*/false);
-  } else {
-    const prompt = NEXT_PROMPTS[layerIndex - 1];
-    addPartnerMsg(prompt, /*typed=*/true);
+    const initialWords = state.firstGreetingWords.length ? state.firstGreetingWords : FALLBACK_GREETING_WORDS;
+    addPartnerWords(initialWords, /*typed=*/false);
   }
+  // 2~4번째 레이어에서는 파트너가 먼저 말 걸지 않는다 — 플레이어 단어 입력이 다음 레이어의 시작점.
+  // (이전엔 NEXT_PROMPTS 고정 문장으로 유도했지만 '단어로만 소통' 규칙과 맞지 않아 제거)
 
   wordInput.value = '';
   wordInput.focus();
@@ -721,24 +860,26 @@ function renderWorld() {
   });
 }
 
-function addPartnerMsg(text, typed) {
+// 단어 배열을 파트너 말풍선으로 출력. 말풍선은 플레이어 입력과 같은 스타일이되 좌측 정렬.
+function addPartnerWords(words, typed) {
   const div = document.createElement('div');
   div.className = 'chat-msg partner';
-  div.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
+  div.innerHTML = `<div class="who">${state.partnerName} &gt;</div><span class="text"></span>`;
   chatPanel.appendChild(div);
   const textEl = div.querySelector('.text');
+  const display = formatWordList(words);
   scrollChatToBottom();
-  if (typed) return typewriter(textEl, text);
-  textEl.textContent = text;
+  if (typed) return typewriter(textEl, display);
+  textEl.textContent = display;
   return Promise.resolve();
 }
 
-function addMyMsg(text) {
+function addMyWords(words) {
   const div = document.createElement('div');
   div.className = 'chat-msg me';
   const span = document.createElement('span');
   span.className = 'text';
-  span.textContent = text;
+  span.textContent = formatWordList(words);
   div.appendChild(span);
   chatPanel.appendChild(div);
   scrollChatToBottom();
@@ -802,7 +943,7 @@ async function submitWords() {
 
   sendBtn.disabled = true;
   wordInput.disabled = true;
-  addMyMsg(words.join(', '));
+  addMyWords(words);
   wordInput.value = '';
   inputHint.textContent = '';
 
@@ -837,24 +978,20 @@ async function submitWords() {
   }
 
   applyMood(result.mood);
+  if (result.ascii_art) addAsciiLayer(result.ascii_art, result.mood);
   state.sessions.push({
     layer,
     keywords: words,
     narrative: result.narrative,
+    partner_words: result.partner_words,
+    ascii_art: result.ascii_art,
     mood: result.mood
   });
   saveWorld();
 
-  const narrativeDiv = document.createElement('div');
-  narrativeDiv.className = 'chat-msg partner';
-  narrativeDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text"></div>`;
-  chatPanel.appendChild(narrativeDiv);
-  scrollChatToBottom();
-  await typewriter(narrativeDiv.querySelector('.text'), result.narrative);
-
-  await sleep(400);
+  // narrative는 WORLD 패널에만 노출. 채팅에는 파트너가 '단어로만' 응답한다.
   renderWorld();
-  await addPartnerMsg(result.partner_message, /*typed=*/true);
+  await addPartnerWords(result.partner_words, /*typed=*/true);
 
   await sleep(1500);
   await showSessionEndChoice();
@@ -869,8 +1006,8 @@ async function showSessionEndChoice() {
   hintEl.style.display = 'none';
 
   const isLast = state.currentLayerIndex >= LAYERS.length - 1;
-  const promptText = isLast ? '다 만들었네요.' : '계속할까요?';
-  await addPartnerMsg(promptText, /*typed=*/true);
+  const promptWords = isLast ? ['다', '만들었네요'] : ['계속', '할까요'];
+  await addPartnerWords(promptWords, /*typed=*/true);
 
   const existing = document.getElementById('session-end-choice');
   if (existing) existing.remove();
@@ -906,26 +1043,25 @@ function buildGreetingPrompt() {
   const p = state.playerProfile || { name: '익명', intro: '' };
   const tone = PERSONAS[state.partnerName]?.tone || '';
   const introLine = p.intro
-    ? `The player's name is ${p.name}. Their intro: "${p.intro}". You may subtly reference this if natural, but don't force it.`
-    : `The player's name is ${p.name}. They didn't write an intro.`;
-  return `You are ${state.partnerName}, a stranger who just got matched online with another person to build a small fictional world together. You are sending your VERY FIRST chat message to them right now — like two online strangers who just matched to play a casual worldbuilding game.
+    ? `상대방의 이름: ${p.name}. 한 줄 소개: "${p.intro}". 자연스럽다면 슬쩍 받아도 되지만, 억지로 엮지 말 것.`
+    : `상대방의 이름: ${p.name}. (소개는 비어 있음)`;
+  return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들려고 해요.
+이 공간의 규칙: 단어로만 소통합니다. 문장은 절대 사용하지 않습니다.
 
 ${introLine}
 
-Tone guidance: ${tone}
+말투 가이드: ${tone}
 
-Rules for this greeting:
-- Korean. One short sentence, two max. Colloquial chat style.
-- Sound like a real person typing to a stranger, not a host or a game master.
-- DO NOT use formulaic openings: "안녕하세요", "반갑습니다", "저도 처음이에요", ":)", "!!".
-- DO NOT introduce yourself by name — they already see your name on screen.
-- DO NOT explain the game or say "같이 만들어봐요" type phrases.
-- Good examples: "어떤 세계 좋아해요?", "뭔가 이상한 데 가고 싶은 날이에요", "오늘 기분이 어때요, 세계 만들기 전에".
-- Bad examples: "안녕하세요! 저도 처음이에요 :)", "반갑습니다. 함께 세계를 만들어봐요".
+지금 상대에게 보낼 첫 인사를 단어로만 만들어주세요.
 
-Respond ONLY in JSON:
-{ "greeting": "한 문장" }
-Do not include any text outside the JSON.`;
+greeting_words 작성 규칙:
+- 반드시 단어 2~4개. 문장 금지, 조사 붙은 긴 구절 금지.
+- 낯선 사람과의 짧은 인사 느낌.
+- 좋은 예: ["안녕", "뭐부터"] / ["반가워요", "시작해요"] / ["오늘", "이상한", "기분"]
+- 나쁜 예: ["안녕하세요 반갑습니다", "같이 만들어봐요"] ← 문장·설명
+
+JSON으로만 답하세요. 다른 텍스트 금지.
+{ "greeting_words": ["단어1", "단어2"] }`;
 }
 
 async function tryJsonOnce(model, prompt, requiredKeys) {
@@ -957,14 +1093,16 @@ async function tryJsonOnce(model, prompt, requiredKeys) {
   }
 }
 
-// 첫 인사는 재시도 실패 시 FALLBACK_GREETING으로 대체하므로 조용히 실패해도 된다.
+// 첫 인사는 실패 시 FALLBACK_GREETING_WORDS로 대체하므로 조용히 실패해도 된다.
 async function fetchGreeting() {
   const prompt = buildGreetingPrompt();
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryJsonOnce(model, prompt, ['greeting']);
-      if (result.ok) return result.data.greeting;
+      const result = await tryJsonOnce(model, prompt, ['greeting_words']);
+      if (result.ok && Array.isArray(result.data.greeting_words) && result.data.greeting_words.length) {
+        return result.data.greeting_words;
+      }
       if (!result.retryable) return null;
       if (attempt < maxAttempts - 1) {
         await sleep(RETRY_DELAYS[attempt]);
@@ -976,59 +1114,68 @@ async function fetchGreeting() {
 
 function buildPrompt(layer, words) {
   const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
+  const priorAscii = state.sessions.length
+    ? state.sessions.map(s => `[${s.layer}]\n${s.ascii_art || '(없음)'}`).join('\n\n')
+    : '(아직 없음 — 이번이 첫 레이어)';
   const tone = PERSONAS[state.partnerName]?.tone || '';
   const p = state.playerProfile || { name: '익명', intro: '' };
   const profileLine = p.intro
-    ? `The player's name is ${p.name}. Their intro: "${p.intro}". You may subtly reference this if natural, but don't force it.`
-    : `The player's name is ${p.name}.`;
-  return `You are ${state.partnerName}, chatting with a friend online to build a small fictional world together.
-You are NOT a narrator or a novelist. You are a regular person typing in a chat window.
+    ? `상대방의 이름: ${p.name}. 한 줄 소개: "${p.intro}". 자연스럽다면 슬쩍 받아도 되지만, 억지로 엮지 말 것.`
+    : `상대방의 이름: ${p.name}.`;
+  return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들고 있어요.
+이 공간의 규칙: 단어로만 소통합니다. 문장은 절대 사용하지 않습니다.
 
 ${profileLine}
 
-Tone guidance: ${tone}
+말투 가이드: ${tone}
 
-CRITICAL tone rules for Korean output:
-- Write like a friend texting. Short. Casual. Natural.
-- NO literary/poetic language. NO ornate metaphors. NO stacked adjectives.
-- Don't show off vocabulary. Use plain everyday words.
-- It's a chat message, not a paragraph from a novel.
-- Korean should sound colloquial (e.g., "~있어요", "~같아요", "~네요" is fine; avoid stiff formal prose).
+세계는 네 개의 레이어로 쌓입니다: 장소 → 사람 → 사건 → 유물.
+플레이어가 던진 단어: ${words.join(', ')}
+지금까지 만든 세계(narrative 기록):
+${priorNarratives || '(아직 없음 — 이번이 첫 레이어)'}
 
-BAD examples (too AI, too literary — DO NOT write like this):
-  "낡은 컴퓨터 화면의 푸른빛이 작은 방을 아늑하게 채운다. 친구와 나란히 앉아 키보드를 두드리며 밤을 지새우던 곳, 수많은 웃음과 깊은 우정의 흔적이 이곳의 공기에 스며들어 있다."
-  "푸르스름한 안개 속에서 녹슨 등대가 바다의 깊이를 가늠하게 만든다."
+지금까지의 ASCII 분위기:
+${priorAscii}
 
-GOOD examples (natural, chat-like — write like this):
-  "낡은 컴퓨터 있는 작은 방이에요. 친구랑 밤새 키보드 두드리던 데. 웃음 소리 많이 났던 곳."
-  "녹슨 등대가 있어요. 안개 때문에 잘 안 보이는데 삐걱거리는 소리가 들려요."
+현재 만들 레이어: ${layer}
 
-The user is building a world layer by layer: Place → Person → Event → Relic.
-
-Current world context:
-${priorNarratives || '(none yet — this is the first layer)'}
-
-Current layer: ${layer}
-User's keywords: ${words.join(', ')}
-
-Respond ONLY in JSON:
+아래 JSON 구조로만 답하세요. JSON 바깥 텍스트 금지.
 {
-  "narrative": "Korean. 1-2 short sentences. Casual chat style. No poetic language. Just describe what's there simply, using the keywords. Max ~60 characters total if possible.",
-  "partner_message": "Korean. ONE short casual sentence from ${state.partnerName} to the user. Like a chat reply. Warm but brief (under 25 characters if possible). Examples: '오, 좋은데요?', '누가 살고 있을까요?', '분위기 느껴져요.'",
+  "narrative": "한국어 1~2문장. WORLD 패널에 들어갈 세계 묘사. 문학체·장식 은유 금지. 플레이어 단어를 재료로 담백하게. 60자 내외.",
+  "partner_words": ["단어", "단어", "단어"],
+  "ascii_art": "30자 × 15행 ASCII 아트. \\n으로 줄바꿈.",
   "mood": {
-    "primary_color": "hex color that fits the atmosphere",
-    "secondary_color": "contrasting hex for accents",
+    "primary_color": "#hex",
+    "secondary_color": "#hex",
     "font_tone": "serif | mono | sans | display",
-    "keywords": ["분위기 키워드1", "키워드2", "키워드3"]
+    "keywords": ["키워드1", "키워드2", "키워드3"]
   }
 }
-Do not include any text outside the JSON.`;
+
+partner_words 작성 규칙:
+- 반드시 단어 3~5개. 문장 금지, 조사 달린 긴 구절 금지.
+- 플레이어의 단어를 받아 연상되는 단어로 응답. 말투 가이드를 반영.
+- 좋은 예: ["녹슨", "냄새", "오래된"] / ["조용한", "발소리", "없는"]
+- 나쁜 예: ["무서운 느낌이에요", "정말 좋네요"] ← 문장이라 금지
+
+ascii_art 작성 규칙:
+- 정확히 30자 × 15행. 각 행은 정확히 30자(공백 포함). 줄바꿈은 '\\n'.
+- 현재 레이어(${layer})의 분위기를 시각적으로 표현.
+- 사용 문자 예: ░ ▒ ▓ █ . , - _ / \\ | + * 등.
+- 이전 세션의 ASCII가 있으면 그 분위기를 바탕으로 발전시킬 것 (완전히 다른 그림으로 리셋 금지).
+
+narrative 작성 규칙:
+- 한국어 1~2문장, 채팅체. "~있어요", "~같아요" 같은 구어. 문학체·은유 금지.
+- 플레이어 단어를 담백하게 풀어 쓴다. 60자 내외.
+
+mood 작성 규칙:
+- primary_color/secondary_color는 레이어 분위기에 맞는 hex. font_tone은 네 값 중 하나.`;
 }
 
 // 재시도 정책:
 // - 각 모델마다 초기 1회 + RETRY_DELAYS 길이만큼 재시도 (총 4회).
 // - 일시 오류(503 등)에만 재시도. 401/400 같은 영구 오류는 즉시 종료.
-// - 기본 모델이 완전히 실패하면 폴백 모델(flash-lite)로 전환.
+// - 기본 모델(flash-lite)이 완전히 실패하면 폴백 모델(flash)로 전환.
 // - onStall(stallIdx)은 '재시도 대기에 들어가는 순간'마다 호출되어 UI 문구만 갱신한다.
 async function callGemini(layer, words, onStall) {
   const prompt = buildPrompt(layer, words);
@@ -1036,7 +1183,7 @@ async function callGemini(layer, words, onStall) {
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryJsonOnce(model, prompt, ['narrative', 'partner_message', 'mood']);
+      const result = await tryJsonOnce(model, prompt, ['narrative', 'partner_words', 'mood']);
       if (result.ok) return result.data;
       if (!result.retryable) return null;
       if (attempt < maxAttempts - 1) {
@@ -1117,6 +1264,7 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
     partnerName: 'Kai',
     playerProfile: state.playerProfile || { name: '익명', intro: '' },
     firstGreeting: '',
+    firstGreetingWords: [],
     currentLayerIndex: 0,
     sessions: [],
     createdAt: null
@@ -1124,6 +1272,19 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
   document.body.classList.remove('with-mood');
   document.documentElement.style.setProperty('--mood-primary', '#2C3E50');
   document.documentElement.style.setProperty('--font-body', "'Noto Sans KR', sans-serif");
+
+  // 이전 플레이 잔여물 정리: 채팅/WORLD/ASCII 배경/세션 종료 버튼/입력창 상태.
+  chatPanel.innerHTML = '';
+  worldLayersEl.innerHTML = '';
+  document.getElementById('session-end-choice')?.remove();
+  const asciiContainer = document.getElementById('ascii-bg-container');
+  if (asciiContainer) asciiContainer.innerHTML = '';
+  const inputArea = document.querySelector('.input-area');
+  const hintEl = document.getElementById('input-hint');
+  if (inputArea) inputArea.style.display = '';
+  if (hintEl) hintEl.style.display = '';
+  wordInput.disabled = false;
+
   startMatching();
 });
 
