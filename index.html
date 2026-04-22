@@ -343,6 +343,15 @@
     outline: none;
   }
   .input-area input:focus { border-color: var(--text-main); }
+  .confirm-btn {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+  }
+  .confirm-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
   .input-hint {
     padding: 0 40px 12px;
     font-size: 0.78rem;
@@ -540,6 +549,7 @@
   <div class="input-area">
     <input type="text" id="word-input" placeholder="예: 안개, 등대, 녹슨" autocomplete="off">
     <button id="send-btn" disabled>전송</button>
+    <button id="confirm-btn" class="confirm-btn" type="button">이걸로 할게요</button>
   </div>
 </section>
 
@@ -630,6 +640,10 @@ let state = {
   playerProfile: { name: '익명', intro: '' },
   firstGreeting: '',
   currentLayerIndex: 0,
+  // 현재 세션(레이어)의 멀티 턴 상태. 세션 진입 시마다 초기화된다.
+  turnCount: 0,
+  sessionKeywords: [],
+  sessionChatHistory: [],
   sessions: [],
   createdAt: null
 };
@@ -870,10 +884,20 @@ const chatPanel = document.getElementById('chat-panel');
 const worldLayersEl = document.getElementById('world-layers');
 const wordInput = document.getElementById('word-input');
 const sendBtn = document.getElementById('send-btn');
+const confirmBtn = document.getElementById('confirm-btn');
 const inputHint = document.getElementById('input-hint');
+
+// "이걸로 할게요" 버튼은 숨김이 기본. 2턴 이상 + propose_end 신호 때 노출.
+function showConfirmBtn() { confirmBtn.classList.add('visible'); }
+function hideConfirmBtn() { confirmBtn.classList.remove('visible'); }
 
 function enterSession(layerIndex, firstEntry) {
   state.currentLayerIndex = layerIndex;
+  // 세션(레이어) 내 멀티 턴 상태 초기화. 세션을 넘어갈 때도 동일하게 리셋된다.
+  state.turnCount = 0;
+  state.sessionKeywords = [];
+  state.sessionChatHistory = [];
+  hideConfirmBtn();
   showScreen('session-screen');
   document.getElementById('session-partner-name').textContent = state.partnerName;
   document.getElementById('session-layer-label').textContent = '— ' + LAYERS[layerIndex];
@@ -1009,6 +1033,7 @@ wordInput.addEventListener('keydown', (e) => {
   }
 });
 sendBtn.addEventListener('click', submitWords);
+confirmBtn.addEventListener('click', handleConfirm);
 
 async function submitWords() {
   const words = parseWords(wordInput.value);
@@ -1016,7 +1041,11 @@ async function submitWords() {
 
   sendBtn.disabled = true;
   wordInput.disabled = true;
+  hideConfirmBtn();
   addMyWords(words);
+  state.sessionKeywords.push(...words);
+  state.sessionChatHistory.push({ who: 'me', words: [...words] });
+  state.turnCount++;
   wordInput.value = '';
   inputHint.textContent = '';
 
@@ -1026,52 +1055,132 @@ async function submitWords() {
   const result = await callGemini(layer, words, (stallIdx) => {
     const msgFn = STALL_MESSAGES[Math.min(stallIdx, STALL_MESSAGES.length - 1)];
     updateTypingIndicator(msgFn(state.partnerName));
-  });
+  }, /*confirm=*/false);
   removeTypingIndicator();
 
   if (!result) {
-    const retryDiv = document.createElement('div');
-    retryDiv.className = 'chat-msg partner';
-    retryDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text">${state.partnerName}가 한참 조용하네요. 다시 한 번 말 걸어볼까요?</div>`;
-    chatPanel.appendChild(retryDiv);
-    const retryBtn = document.createElement('button');
-    retryBtn.textContent = '다시 시도';
-    retryBtn.style.marginLeft = '0';
-    retryBtn.style.marginTop = '0.5rem';
-    retryDiv.appendChild(retryBtn);
-    retryBtn.addEventListener('click', () => {
-      retryDiv.remove();
-      wordInput.value = words.join(', ');
-      wordInput.disabled = false;
-      updateSendBtn();
-      wordInput.focus();
-    });
-    wordInput.disabled = false;
+    showPartnerStallRetry(words);
     return;
   }
 
-  applyMood(result.mood);
-  if (result.ascii_art) addAsciiLayer(result.ascii_art, result.mood);
-  state.sessions.push({
-    layer,
-    keywords: words,
-    narrative: result.narrative,
-    partner_words: result.partner_words,
-    ascii_art: result.ascii_art,
-    mood: result.mood
-  });
-  saveWorld();
+  const partnerWords = Array.isArray(result.partner_words) ? result.partner_words : [];
+  state.sessionChatHistory.push({ who: 'partner', words: partnerWords });
+  await addPartnerWords(partnerWords, /*typed=*/true);
 
-  // narrative는 WORLD 패널에만 노출. 채팅에는 파트너가 '단어로만' 응답한다.
-  renderWorld();
-  await addPartnerWords(result.partner_words, /*typed=*/true);
+  const signal = result.session_signal;
+  if (signal === 'propose_end') {
+    addSystemMsg('이 정도면 됐을 것 같은데요');
+    showConfirmBtn();
+  } else if (state.turnCount >= 2) {
+    // 2턴 이상이면 파트너가 continue로 답했더라도 플레이어가 끝낼 여지를 연다.
+    showConfirmBtn();
+  }
 
-  await sleep(1500);
-  await showSessionEndChoice();
+  wordInput.disabled = false;
+  wordInput.focus();
+  updateSendBtn();
 }
 
-// 세션 종료 시 별도 화면으로 전환하지 않고, 세션 화면 하단의 입력 영역을
-// '계속 만들기 / 공유하기' 버튼으로 교체해 맥락이 끊기지 않도록 한다.
+// 파트너가 응답을 만들어내지 못한 경우: 예전과 동일한 복구 UI. submitWords/handleConfirm 공용.
+function showPartnerStallRetry(lastWords) {
+  const retryDiv = document.createElement('div');
+  retryDiv.className = 'chat-msg partner sentence';
+  retryDiv.innerHTML = `<div class="who">${state.partnerName} &gt;</div><div class="text">${state.partnerName}가 한참 조용하네요. 다시 한 번 말 걸어볼까요?</div>`;
+  chatPanel.appendChild(retryDiv);
+  const retryBtn = document.createElement('button');
+  retryBtn.textContent = '다시 시도';
+  retryBtn.style.marginLeft = '0';
+  retryBtn.style.marginTop = '0.5rem';
+  retryDiv.appendChild(retryBtn);
+  retryBtn.addEventListener('click', () => {
+    retryDiv.remove();
+    wordInput.value = lastWords.join(', ');
+    wordInput.disabled = false;
+    updateSendBtn();
+    wordInput.focus();
+  });
+  wordInput.disabled = false;
+}
+
+// "이걸로 할게요" 처리. 대표 키워드를 플레이어 말풍선으로 다시 한 번 띄우고, agree/disagree를 받는다.
+async function handleConfirm() {
+  hideConfirmBtn();
+  sendBtn.disabled = true;
+  wordInput.disabled = true;
+
+  // 대표 키워드: 세션에서 지금까지 플레이어가 던진 단어를 중복 제거 후 앞 3개.
+  const seen = new Set();
+  const rep = [];
+  for (const w of state.sessionKeywords) {
+    if (seen.has(w)) continue;
+    seen.add(w);
+    rep.push(w);
+    if (rep.length >= 3) break;
+  }
+  if (rep.length === 0) {
+    // 방어적: 키워드가 하나도 없으면 확정을 무시하고 입력으로 복귀.
+    wordInput.disabled = false;
+    wordInput.focus();
+    return;
+  }
+
+  addMyWords(rep);
+  state.sessionChatHistory.push({ who: 'me', words: rep, confirm: true });
+
+  showTypingIndicator();
+  const layer = LAYERS[state.currentLayerIndex];
+  const result = await callGemini(layer, rep, (stallIdx) => {
+    const msgFn = STALL_MESSAGES[Math.min(stallIdx, STALL_MESSAGES.length - 1)];
+    updateTypingIndicator(msgFn(state.partnerName));
+  }, /*confirm=*/true);
+  removeTypingIndicator();
+
+  if (!result) {
+    // 확정 응답 실패: 버튼 복원, 입력 재활성화. 사용자에게 다시 확정하거나 대화를 이어갈 여지를 준다.
+    showConfirmBtn();
+    wordInput.disabled = false;
+    wordInput.focus();
+    return;
+  }
+
+  const partnerWords = Array.isArray(result.partner_words) ? result.partner_words : [];
+  state.sessionChatHistory.push({ who: 'partner', words: partnerWords });
+  await addPartnerWords(partnerWords, /*typed=*/true);
+
+  const signal = result.session_signal;
+  // agree인데 필수 필드가 누락된 경우 안전하게 disagree로 격하(대화 재개)
+  const canFinalize = signal === 'agree' && result.narrative && result.mood && typeof result.ascii_art === 'string' && result.ascii_art.length > 0;
+
+  if (canFinalize) {
+    applyMood(result.mood);
+    addAsciiLayer(result.ascii_art, result.mood);
+    state.sessions.push({
+      layer,
+      keywords: rep,
+      narrative: result.narrative,
+      partner_words: partnerWords,
+      ascii_art: result.ascii_art,
+      mood: result.mood,
+      allKeywords: [...state.sessionKeywords],
+      chat: [...state.sessionChatHistory]
+    });
+    saveWorld();
+    renderWorld();
+
+    await sleep(1000);
+    await showSessionEndChoice();
+    return;
+  }
+
+  // disagree 또는 agree 필드 누락: 대화 계속.
+  await sleep(400);
+  wordInput.disabled = false;
+  wordInput.focus();
+  updateSendBtn();
+}
+
+// 세션이 agree로 확정된 직후 호출된다. 입력 영역을 '계속 만들기 / 공유하기' 버튼으로 교체.
+// 이전엔 여기서 시스템 알림을 띄웠지만, agree로 받은 파트너 단어 자체가 이미 맥락을 전달하므로 제거.
 async function showSessionEndChoice() {
   const inputArea = document.querySelector('.input-area');
   const hintEl = document.getElementById('input-hint');
@@ -1079,9 +1188,6 @@ async function showSessionEndChoice() {
   hintEl.style.display = 'none';
 
   const isLast = state.currentLayerIndex >= LAYERS.length - 1;
-  const promptText = isLast ? '다 만들었어요' : '계속할까요?';
-  addSystemMsg(promptText);
-  await sleep(300);
 
   const existing = document.getElementById('session-end-choice');
   if (existing) existing.remove();
@@ -1188,7 +1294,7 @@ async function fetchGreeting() {
   return null;
 }
 
-function buildPrompt(layer, words) {
+function buildPrompt(layer, wordsThisTurn, confirm) {
   const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
   const priorAscii = state.sessions.length
     ? state.sessions.map(s => `[${s.layer}]\n${s.ascii_art || '(없음)'}`).join('\n\n')
@@ -1198,6 +1304,34 @@ function buildPrompt(layer, words) {
   const profileLine = p.intro
     ? `상대방의 이름: ${p.name}. 한 줄 소개: "${p.intro}". 자연스럽다면 슬쩍 받아도 되지만, 억지로 엮지 말 것.`
     : `상대방의 이름: ${p.name}.`;
+
+  const sessionHistoryText = state.sessionChatHistory.length
+    ? state.sessionChatHistory.map(h => {
+        const who = h.who === 'me' ? '플레이어' : state.partnerName;
+        const listed = '[' + h.words.map(w => `"${w}"`).join(', ') + ']';
+        return `${who}: ${listed}`;
+      }).join('\n')
+    : '(아직 없음)';
+
+  const turnNumber = state.turnCount;
+
+  const confirmInstruction = confirm
+    ? `\n\n지금 플레이어가 "이걸로 할게요"를 눌러 이 레이어를 확정하고 싶어합니다. session_signal은 반드시 agree 또는 disagree로 응답하세요. agree일 때만 narrative/ascii_art/mood를 실제 값으로 채우고, disagree면 narrative는 빈 문자열, ascii_art는 빈 문자열, mood는 null로 두세요.`
+    : '';
+
+  const schemaForTurn = confirm
+    ? `{
+  "partner_words": ["단어", "단어", "단어"],
+  "session_signal": "agree | disagree",
+  "narrative": "agree일 때만 한국어 1~2문장, 60자 내외. disagree면 빈 문자열.",
+  "ascii_art": "agree일 때만 30자 × 15행(줄바꿈은 \\n). disagree면 빈 문자열.",
+  "mood": "agree일 때만 { primary_color, secondary_color, font_tone, keywords }. disagree면 null."
+}`
+    : `{
+  "partner_words": ["단어", "단어", "단어"],
+  "session_signal": "continue | propose_end"
+}`;
+
   return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들고 있어요.
 이 공간의 규칙: 단어로만 소통합니다. 문장은 절대 사용하지 않습니다.
 
@@ -1206,46 +1340,41 @@ ${profileLine}
 말투 가이드: ${tone}
 
 세계는 네 개의 레이어로 쌓입니다: 장소 → 사람 → 사건 → 유물.
-플레이어가 던진 단어: ${words.join(', ')}
-지금까지 만든 세계(narrative 기록):
+지금까지 확정된 세계(narrative 기록):
 ${priorNarratives || '(아직 없음 — 이번이 첫 레이어)'}
 
 지금까지의 ASCII 분위기:
 ${priorAscii}
 
 현재 만들 레이어: ${layer}
+이번 세션의 플레이어 턴 번호(방금 턴 포함): ${turnNumber}
+이번 세션에서 주고받은 단어 히스토리(오래된 순):
+${sessionHistoryText}
+플레이어가 방금 던진 단어: ${wordsThisTurn.join(', ')}${confirmInstruction}
 
 아래 JSON 구조로만 답하세요. JSON 바깥 텍스트 금지.
-{
-  "narrative": "한국어 1~2문장. WORLD 패널에 들어갈 세계 묘사. 문학체·장식 은유 금지. 플레이어 단어를 재료로 담백하게. 60자 내외.",
-  "partner_words": ["단어", "단어", "단어"],
-  "ascii_art": "30자 × 15행 ASCII 아트. \\n으로 줄바꿈.",
-  "mood": {
-    "primary_color": "#hex",
-    "secondary_color": "#hex",
-    "font_tone": "serif | mono | sans | display",
-    "keywords": ["키워드1", "키워드2", "키워드3"]
-  }
-}
+${schemaForTurn}
+
+session_signal 판단 기준:
+- continue: 기본값. 대화를 계속 이어간다.
+- propose_end: 2턴 이상 주고받았고 이 레이어가 충분히 구체화됐을 때. 전체 응답의 30% 이내로만 사용할 것.
+- agree: 플레이어가 확정을 요청했을 때(위의 확정 지시) 대부분 동의.
+- disagree: 확정 요청이지만 대화가 1턴뿐이거나 너무 모호할 때. 전체의 20% 이내로만 사용할 것.
 
 partner_words 작성 규칙:
-- 반드시 단어 3~5개. 문장 금지, 조사 달린 긴 구절 금지.
+- 반드시 단어 2~5개. 문장 금지, 조사 달린 긴 구절 금지.
 - 플레이어의 단어를 받아 연상되는 단어로 응답. 말투 가이드를 반영.
 - 좋은 예: ["녹슨", "냄새", "오래된"] / ["조용한", "발소리", "없는"]
 - 나쁜 예: ["무서운 느낌이에요", "정말 좋네요"] ← 문장이라 금지
+${confirm ? `
+agree/disagree일 때의 뉘앙스:
+- agree: 동의·수긍 느낌. 예: ["좋아요", "그거로", "해요"] / ["느낌", "좋은데요"]
+- disagree: 조금 더 하고 싶다는 보류 느낌. 예: ["조금", "더"] / ["아직", "뭔가", "부족"]` : ''}
 
-ascii_art 작성 규칙:
-- 정확히 30자 × 15행. 각 행은 정확히 30자(공백 포함). 줄바꿈은 '\\n'.
-- 현재 레이어(${layer})의 분위기를 시각적으로 표현.
-- 사용 문자 예: ░ ▒ ▓ █ . , - _ / \\ | + * 등.
-- 이전 세션의 ASCII가 있으면 그 분위기를 바탕으로 발전시킬 것 (완전히 다른 그림으로 리셋 금지).
-
-narrative 작성 규칙:
-- 한국어 1~2문장, 채팅체. "~있어요", "~같아요" 같은 구어. 문학체·은유 금지.
-- 플레이어 단어를 담백하게 풀어 쓴다. 60자 내외.
-
-mood 작성 규칙:
-- primary_color/secondary_color는 레이어 분위기에 맞는 hex. font_tone은 네 값 중 하나.`;
+${confirm ? `agree 시 narrative/ascii_art/mood 작성 규칙:
+- narrative: 한국어 1~2문장, 채팅체. "~있어요", "~같아요" 같은 구어. 60자 내외. 플레이어 단어를 담백하게.
+- ascii_art: 정확히 30자 × 15행. 줄바꿈은 '\\n'. 사용 문자 예: ░ ▒ ▓ █ . , - _ / \\ | + * 등. 이전 세션 ASCII가 있으면 그 분위기를 이어 발전시킬 것.
+- mood: primary_color/secondary_color는 레이어 분위기에 맞는 hex. font_tone은 serif | mono | sans | display 중 하나.` : ''}`;
 }
 
 // 재시도 정책:
@@ -1253,13 +1382,16 @@ mood 작성 규칙:
 // - 일시 오류(503 등)에만 재시도. 401/400 같은 영구 오류는 즉시 종료.
 // - 기본 모델(flash-lite)이 완전히 실패하면 폴백 모델(flash)로 전환.
 // - onStall(stallIdx)은 '재시도 대기에 들어가는 순간'마다 호출되어 UI 문구만 갱신한다.
-async function callGemini(layer, words, onStall) {
-  const prompt = buildPrompt(layer, words);
+async function callGemini(layer, words, onStall, confirm) {
+  const prompt = buildPrompt(layer, words, confirm);
   let stallIdx = 0;
+  // partner_words와 session_signal은 모든 경우 필수. narrative/mood/ascii_art는
+  // confirm=true && session_signal==='agree' 일 때만 의미 있으므로, 존재 여부는 호출부에서 검증.
+  const required = ['partner_words', 'session_signal'];
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryJsonOnce(model, prompt, ['narrative', 'partner_words', 'mood']);
+      const result = await tryJsonOnce(model, prompt, required);
       if (result.ok) return result.data;
       if (!result.retryable) return null;
       if (attempt < maxAttempts - 1) {
@@ -1341,6 +1473,9 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
     playerProfile: state.playerProfile || { name: '익명', intro: '' },
     firstGreeting: '',
     currentLayerIndex: 0,
+    turnCount: 0,
+    sessionKeywords: [],
+    sessionChatHistory: [],
     sessions: [],
     createdAt: null
   };
