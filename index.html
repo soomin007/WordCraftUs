@@ -50,17 +50,15 @@
     overflow: hidden;
     background: transparent;
   }
-  .ascii-layer {
+  .mood-layer {
     position: absolute;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    white-space: pre;
-    font-family: 'JetBrains Mono', monospace;
-    line-height: 1.05;
+    width: 100%;
+    height: 100%;
     opacity: 0;
-    transition: opacity 2s ease, color 2s ease;
+    transition: opacity 2s ease;
+    pointer-events: none;
+    filter: contrast(120%);
     user-select: none;
   }
 
@@ -292,21 +290,6 @@
     border: 1px solid #2a2a2a;
     font-family: 'JetBrains Mono', monospace;
   }
-  .chat-msg.system {
-    text-align: center;
-    color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.78rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    margin: 1.4rem 0;
-  }
-  .chat-msg.system .sys-inner {
-    display: inline-block;
-    padding: 6px 18px;
-    border-top: 1px solid #2a2a2a;
-    border-bottom: 1px solid #2a2a2a;
-  }
   .typing-indicator {
     color: var(--text-dim);
     font-size: 0.85rem;
@@ -352,8 +335,16 @@
     opacity: 1;
     pointer-events: auto;
   }
+  .quest-hint {
+    padding: 12px 40px 0;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 1em;
+    letter-spacing: 0.05em;
+  }
   .input-hint {
-    padding: 0 40px 12px;
+    padding: 6px 40px 12px;
     font-size: 0.78rem;
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
@@ -545,6 +536,7 @@
       <div id="world-layers"></div>
     </div>
   </div>
+  <div class="quest-hint" id="quest-hint"></div>
   <div class="input-hint" id="input-hint">단어 1-5개를 쉼표 또는 스페이스로 구분해서 입력하세요.</div>
   <div class="input-area">
     <input type="text" id="word-input" placeholder="예: 안개, 등대, 녹슨" autocomplete="off">
@@ -608,7 +600,42 @@ const PERSONA_TYPING = {
   Lena:  40,
   Ren:   30
 };
-const FALLBACK_GREETING = '잠깐 이야기하다가 세계 만들어볼까요';
+// 파트너 첫 인사. API 호출 없이 후보 중 랜덤 선택 — 429 쿼터·지연 모두 회피.
+const PARTNER_GREETINGS = [
+  '낯선 곳이요. 지도에 없는 데.',
+  '오래된 것들이 남아있는 세계요.',
+  '아무도 없는 조용한 데가 좋아요.',
+  '경계가 불분명한 곳이요.',
+  '빛이 이상하게 드는 장소들이요.',
+  '한 번도 이름 붙여진 적 없는 곳이요.'
+];
+// 확정 흐름의 말풍선도 하드코딩. session_signal만 Gemini에서 받고 단어는 여기서 고른다.
+const CONFIRM_MY_WORDS = ['여기까지', '다음'];
+const CONFIRM_PARTNER_AGREE = [
+  ['확인', '진행'],
+  ['동의', '계속'],
+  ['좋아요', '가죠'],
+  ['ㅇㅋ', '다음']
+];
+const CONFIRM_PARTNER_DISAGREE = [
+  ['조금', '더'],
+  ['아직', '이른'],
+  ['한번', '더']
+];
+// mood.keywords에 아래 키가 포함되면 해당 Canvas 패턴을 그린다. 부분 문자열 매칭.
+const PATTERN_KEYWORDS = {
+  water:  ['물', '바다', '강', '비', '파도', '물결', '호수', '젖은', '흐르는'],
+  forest: ['숲', '나무', '식물', '잎', '가지', '풀', '뿌리', '덩굴'],
+  city:   ['도시', '건물', '방', '벽', '집', '거리', '길', '문', '복도', '골목'],
+  fog:    ['하늘', '구름', '안개', '먼지', '흐린', '뿌연', '희미'],
+  fire:   ['불', '열', '빛', '태양', '반짝', '붉은', '뜨거운', '빨간']
+};
+// 입력창 위 퀘스트 인디케이터. 현재 플레이어가 뭘 해야 하는지 한 줄로 알려준다.
+const QUEST_HINTS = {
+  early:   (layer) => `${layer}를 단어로 묘사해보세요 (1-5개)`,
+  ready:   (layer) => `계속 단어를 나눠도 되고, 마음에 들면 확정할 수 있어요`,
+  propose: () => `파트너가 확정을 제안했어요`
+};
 const FONT_MAP = {
   serif:   "'Noto Serif KR', serif",
   mono:    "'JetBrains Mono', monospace",
@@ -679,28 +706,147 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// =============== ASCII 배경 ===============
-// 세션마다 새 레이어를 쌓는다. 이전 레이어는 희미해지고, 최신 레이어가 1.0으로 가장 진하게 보인다.
-const ASCII_ROWS = 15;
-const ASCII_COLS = 30;
+// =============== Canvas 배경 (mood 기반) ===============
+// 세션마다 새 <canvas>를 컨테이너에 쌓는다. 이전 레이어는 희미해지고 최신이 1.0으로 가장 진하게 보인다.
+// Gemini 응답의 mood(primary_color, keywords)만 보고 클라이언트에서 직접 그린다 — API 호출 없음.
 
-// 모노스페이스 폰트의 글자 너비 대비 폰트 사이즈 비율(대략 0.6). 화면을 꽉 채우는 최대값을 고른다.
-function asciiFontSizePx() {
-  const fromWidth = (window.innerWidth / ASCII_COLS) / 0.6;
-  const fromHeight = window.innerHeight / ASCII_ROWS;
-  return Math.floor(Math.min(fromWidth, fromHeight));
+function hexToRgb(hex) {
+  if (!hex || typeof hex !== 'string') return null;
+  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!m) return null;
+  return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
 }
 
-function updateAsciiLayoutAll() {
-  const size = asciiFontSizePx();
-  document.querySelectorAll('.ascii-layer').forEach(layer => {
-    layer.style.fontSize = size + 'px';
-  });
+// Obra Dinn 느낌을 위해 채도를 반쯤 떨어뜨린다 (중간회색과 블렌드).
+function desaturate(hex, factor = 0.55) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return '#888888';
+  const avg = (rgb.r + rgb.g + rgb.b) / 3;
+  const mix = (c) => Math.round(c * factor + avg * (1 - factor));
+  return `rgb(${mix(rgb.r)}, ${mix(rgb.g)}, ${mix(rgb.b)})`;
 }
 
-// 최신 레이어는 1.0, 바로 이전 0.35, 그 이전 0.2, 그 이전 0.1... 점차 옅어진다.
-function updateAsciiOpacities() {
-  const layers = document.querySelectorAll('#ascii-bg-container .ascii-layer');
+// keywords 배열에서 패턴 그룹을 감지. 부분 문자열 매칭이라 "푸른 바다" → water.
+function pickPattern(keywords) {
+  if (!Array.isArray(keywords) || keywords.length === 0) return 'dots';
+  for (const kw of keywords) {
+    if (typeof kw !== 'string') continue;
+    for (const [pattern, matches] of Object.entries(PATTERN_KEYWORDS)) {
+      if (matches.some(m => kw.includes(m) || m.includes(kw))) return pattern;
+    }
+  }
+  return 'dots';
+}
+
+function drawPattern(ctx, w, h, kind, color) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  if (kind === 'water') drawWaterPattern(ctx, w, h, color);
+  else if (kind === 'forest') drawForestPattern(ctx, w, h);
+  else if (kind === 'city') drawCityPattern(ctx, w, h);
+  else if (kind === 'fog') drawFogPattern(ctx, w, h, color);
+  else if (kind === 'fire') drawFirePattern(ctx, w, h);
+  else drawDotsPattern(ctx, w, h);
+  ctx.restore();
+}
+
+function drawWaterPattern(ctx, w, h) {
+  const lineCount = 32;
+  for (let i = 0; i < lineCount; i++) {
+    const y = (i / lineCount) * h;
+    ctx.globalAlpha = 0.15 + (i / lineCount) * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    for (let x = 0; x <= w; x += 18) {
+      const wave = Math.sin(x * 0.018 + i * 0.35) * 9;
+      ctx.lineTo(x, y + wave);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawForestPattern(ctx, w, h) {
+  const lineCount = 90;
+  for (let i = 0; i < lineCount; i++) {
+    const x = Math.random() * w;
+    const len = (0.25 + Math.random() * 0.7) * h;
+    ctx.globalAlpha = 0.25 + Math.random() * 0.4;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    for (let y = 0; y < len; y += 8) {
+      const jitter = (Math.random() - 0.5) * 2.5;
+      ctx.lineTo(x + jitter, y);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawCityPattern(ctx, w, h) {
+  const g = 44;
+  ctx.globalAlpha = 0.22;
+  ctx.beginPath();
+  for (let x = 0; x < w; x += g) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+  for (let y = 0; y < h; y += g) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+  ctx.stroke();
+  // 무작위 사각형 블록으로 건물 실루엣
+  ctx.globalAlpha = 0.18;
+  const blocks = 40;
+  for (let i = 0; i < blocks; i++) {
+    const cx = Math.floor(Math.random() * (w / g)) * g;
+    const cy = Math.floor(Math.random() * (h / g)) * g;
+    const sh = (1 + Math.floor(Math.random() * 4)) * g;
+    ctx.fillRect(cx, cy - sh, g, sh);
+  }
+}
+
+function drawFogPattern(ctx, w, h, color) {
+  const rgb = hexToRgb(color) || null;
+  const base = rgb ? `${rgb.r}, ${rgb.g}, ${rgb.b}` : '220, 220, 220';
+  const blobs = 18;
+  for (let i = 0; i < blobs; i++) {
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    const r = 90 + Math.random() * 220;
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, `rgba(${base}, 0.14)`);
+    grd.addColorStop(1, `rgba(${base}, 0)`);
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+function drawFirePattern(ctx, w, h) {
+  const cx = w / 2;
+  const cy = h * 0.72;
+  const rayCount = 64;
+  for (let i = 0; i < rayCount; i++) {
+    const angle = (Math.PI * 2 * i) / rayCount + (Math.random() - 0.5) * 0.05;
+    const len = 180 + Math.random() * Math.max(w, h) * 0.85;
+    ctx.globalAlpha = 0.12 + Math.random() * 0.32;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+    ctx.stroke();
+  }
+}
+
+function drawDotsPattern(ctx, w, h) {
+  const dots = 380;
+  for (let i = 0; i < dots; i++) {
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    const r = Math.random() * 2.2;
+    ctx.globalAlpha = 0.18 + Math.random() * 0.4;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function updateMoodLayerOpacities() {
+  const layers = document.querySelectorAll('#ascii-bg-container .mood-layer');
   const total = layers.length;
   layers.forEach((layer, i) => {
     const fromNewest = total - 1 - i;
@@ -713,21 +859,21 @@ function updateAsciiOpacities() {
   });
 }
 
-function addAsciiLayer(art, mood) {
+function drawMoodBackground(mood) {
   const container = document.getElementById('ascii-bg-container');
   if (!container) return;
-  const layer = document.createElement('div');
-  layer.className = 'ascii-layer';
-  layer.style.fontSize = asciiFontSizePx() + 'px';
-  layer.style.color = mood?.primary_color || 'var(--mood-primary)';
-  layer.textContent = art;
-  layer.style.opacity = '0';
-  container.appendChild(layer);
-  // 페이드인: 다음 프레임에 목표 opacity를 부여해 2s 트랜지션이 타도록.
-  requestAnimationFrame(() => requestAnimationFrame(() => updateAsciiOpacities()));
+  const canvas = document.createElement('canvas');
+  canvas.className = 'mood-layer';
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const ctx = canvas.getContext('2d');
+  const color = desaturate(mood?.primary_color || '#888888');
+  const pattern = pickPattern(mood?.keywords);
+  drawPattern(ctx, canvas.width, canvas.height, pattern, color);
+  canvas.style.opacity = '0';
+  container.appendChild(canvas);
+  requestAnimationFrame(() => requestAnimationFrame(() => updateMoodLayerOpacities()));
 }
-
-window.addEventListener('resize', updateAsciiLayoutAll);
 
 // =============== 무드 적용 ===============
 function applyMood(mood) {
@@ -862,8 +1008,9 @@ async function introducePartner() {
   msgEl.innerHTML = `<span style="color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;">${state.partnerName}가 입력 중<span class="dots-inline"></span></span>`;
   await sleep(400);
 
-  const greeting = await fetchGreeting();
-  state.firstGreeting = greeting || FALLBACK_GREETING;
+  // 짧은 생각 시간만 시뮬레이션하고 하드코딩된 후보에서 랜덤 선택.
+  await sleep(600 + Math.random() * 800);
+  state.firstGreeting = PARTNER_GREETINGS[Math.floor(Math.random() * PARTNER_GREETINGS.length)];
 
   msgEl.innerHTML = '';
   await typewriter(msgEl, state.firstGreeting);
@@ -886,10 +1033,20 @@ const wordInput = document.getElementById('word-input');
 const sendBtn = document.getElementById('send-btn');
 const confirmBtn = document.getElementById('confirm-btn');
 const inputHint = document.getElementById('input-hint');
+const questHint = document.getElementById('quest-hint');
 
 // "이걸로 할게요" 버튼은 숨김이 기본. 2턴 이상 + propose_end 신호 때 노출.
 function showConfirmBtn() { confirmBtn.classList.add('visible'); }
 function hideConfirmBtn() { confirmBtn.classList.remove('visible'); }
+
+// 입력창 위 퀘스트 인디케이터. 현재 플레이어가 뭘 해야 하는지 한 줄로.
+function setQuestHint(stage) {
+  const layer = LAYERS[state.currentLayerIndex] || '';
+  if (stage === 'early') questHint.textContent = QUEST_HINTS.early(layer);
+  else if (stage === 'ready') questHint.textContent = QUEST_HINTS.ready(layer);
+  else if (stage === 'propose') questHint.textContent = QUEST_HINTS.propose();
+  else questHint.textContent = '';
+}
 
 function enterSession(layerIndex, firstEntry) {
   state.currentLayerIndex = layerIndex;
@@ -898,6 +1055,7 @@ function enterSession(layerIndex, firstEntry) {
   state.sessionKeywords = [];
   state.sessionChatHistory = [];
   hideConfirmBtn();
+  setQuestHint('early');
   showScreen('session-screen');
   document.getElementById('session-partner-name').textContent = state.partnerName;
   document.getElementById('session-layer-label').textContent = '— ' + LAYERS[layerIndex];
@@ -907,7 +1065,7 @@ function enterSession(layerIndex, firstEntry) {
     chatPanel.innerHTML = '';
     renderWorld();
     // 파트너의 첫 인사만 문장으로 — 단어 규칙은 규칙 화면을 본 이후, 세계 만들기가 시작된 뒤부터 적용된다.
-    const initialGreeting = state.firstGreeting || FALLBACK_GREETING;
+    const initialGreeting = state.firstGreeting || PARTNER_GREETINGS[0];
     addPartnerSentence(initialGreeting, /*typed=*/false);
   }
   // 2~4번째 레이어에서는 파트너가 먼저 말 걸지 않는다 — 플레이어 단어 입력이 다음 레이어의 시작점.
@@ -965,18 +1123,6 @@ function addMyWords(words) {
   const span = document.createElement('span');
   span.className = 'text';
   span.textContent = formatWordList(words);
-  div.appendChild(span);
-  chatPanel.appendChild(div);
-  scrollChatToBottom();
-}
-
-// 대화 흐름과 분리된 시스템 알림 (세션 경계 등). 파트너의 말이 아니라 화면 중앙의 고지선.
-function addSystemMsg(text) {
-  const div = document.createElement('div');
-  div.className = 'chat-msg system';
-  const span = document.createElement('span');
-  span.className = 'sys-inner';
-  span.textContent = text;
   div.appendChild(span);
   chatPanel.appendChild(div);
   scrollChatToBottom();
@@ -1069,11 +1215,14 @@ async function submitWords() {
 
   const signal = result.session_signal;
   if (signal === 'propose_end') {
-    addSystemMsg('이 정도면 됐을 것 같은데요');
     showConfirmBtn();
+    setQuestHint('propose');
   } else if (state.turnCount >= 2) {
     // 2턴 이상이면 파트너가 continue로 답했더라도 플레이어가 끝낼 여지를 연다.
     showConfirmBtn();
+    setQuestHint('ready');
+  } else {
+    setQuestHint('early');
   }
 
   wordInput.disabled = false;
@@ -1102,13 +1251,14 @@ function showPartnerStallRetry(lastWords) {
   wordInput.disabled = false;
 }
 
-// "이걸로 할게요" 처리. 대표 키워드를 플레이어 말풍선으로 다시 한 번 띄우고, agree/disagree를 받는다.
+// "이걸로 할게요" 처리. 내 말풍선과 파트너 응답 단어는 하드코딩 풀에서 고르고,
+// Gemini에서는 session_signal(agree|disagree)과 agree 시 narrative/mood만 받는다.
 async function handleConfirm() {
   hideConfirmBtn();
   sendBtn.disabled = true;
   wordInput.disabled = true;
 
-  // 대표 키워드: 세션에서 지금까지 플레이어가 던진 단어를 중복 제거 후 앞 3개.
+  // WORLD 패널/저장용 대표 키워드: 세션에서 플레이어가 던진 단어를 중복 제거 후 앞 3개.
   const seen = new Set();
   const rep = [];
   for (const w of state.sessionKeywords) {
@@ -1118,14 +1268,14 @@ async function handleConfirm() {
     if (rep.length >= 3) break;
   }
   if (rep.length === 0) {
-    // 방어적: 키워드가 하나도 없으면 확정을 무시하고 입력으로 복귀.
     wordInput.disabled = false;
     wordInput.focus();
     return;
   }
 
-  addMyWords(rep);
-  state.sessionChatHistory.push({ who: 'me', words: rep, confirm: true });
+  // 내 말풍선은 하드코딩. 대표 키워드 반복 대신 "여기까지 / 다음" 같은 확정 제스처.
+  addMyWords(CONFIRM_MY_WORDS);
+  state.sessionChatHistory.push({ who: 'me', words: CONFIRM_MY_WORDS, confirm: true });
 
   showTypingIndicator();
   const layer = LAYERS[state.currentLayerIndex];
@@ -1136,30 +1286,28 @@ async function handleConfirm() {
   removeTypingIndicator();
 
   if (!result) {
-    // 확정 응답 실패: 버튼 복원, 입력 재활성화. 사용자에게 다시 확정하거나 대화를 이어갈 여지를 준다.
     showConfirmBtn();
     wordInput.disabled = false;
     wordInput.focus();
     return;
   }
 
-  const partnerWords = Array.isArray(result.partner_words) ? result.partner_words : [];
+  const signal = result.session_signal;
+  const canFinalize = signal === 'agree' && result.narrative && result.mood;
+
+  const pool = canFinalize ? CONFIRM_PARTNER_AGREE : CONFIRM_PARTNER_DISAGREE;
+  const partnerWords = pool[Math.floor(Math.random() * pool.length)];
   state.sessionChatHistory.push({ who: 'partner', words: partnerWords });
   await addPartnerWords(partnerWords, /*typed=*/true);
 
-  const signal = result.session_signal;
-  // agree인데 필수 필드가 누락된 경우 안전하게 disagree로 격하(대화 재개)
-  const canFinalize = signal === 'agree' && result.narrative && result.mood && typeof result.ascii_art === 'string' && result.ascii_art.length > 0;
-
   if (canFinalize) {
     applyMood(result.mood);
-    addAsciiLayer(result.ascii_art, result.mood);
+    drawMoodBackground(result.mood);
     state.sessions.push({
       layer,
       keywords: rep,
       narrative: result.narrative,
       partner_words: partnerWords,
-      ascii_art: result.ascii_art,
       mood: result.mood,
       allKeywords: [...state.sessionKeywords],
       chat: [...state.sessionChatHistory]
@@ -1172,10 +1320,11 @@ async function handleConfirm() {
     return;
   }
 
-  // disagree 또는 agree 필드 누락: 대화 계속.
+  // disagree: 대화 계속. 퀘스트 힌트는 ready 유지.
   await sleep(400);
   wordInput.disabled = false;
   wordInput.focus();
+  setQuestHint('ready');
   updateSendBtn();
 }
 
@@ -1186,6 +1335,7 @@ async function showSessionEndChoice() {
   const hintEl = document.getElementById('input-hint');
   inputArea.style.display = 'none';
   hintEl.style.display = 'none';
+  questHint.style.display = 'none';
 
   const isLast = state.currentLayerIndex >= LAYERS.length - 1;
 
@@ -1203,6 +1353,7 @@ async function showSessionEndChoice() {
       area.remove();
       inputArea.style.display = '';
       hintEl.style.display = '';
+      questHint.style.display = '';
       wordInput.disabled = false;
       enterSession(state.currentLayerIndex + 1, /*firstEntry=*/false);
     });
@@ -1219,33 +1370,6 @@ async function showSessionEndChoice() {
 }
 
 // =============== Gemini API ===============
-function buildGreetingPrompt() {
-  const p = state.playerProfile || { name: '익명', intro: '' };
-  const tone = PERSONAS[state.partnerName]?.tone || '';
-  const introLine = p.intro
-    ? `상대방의 이름: ${p.name}. 한 줄 소개: "${p.intro}". 자연스럽다면 슬쩍 받아도 되지만, 억지로 엮지 말 것.`
-    : `상대방의 이름: ${p.name}. (소개는 비어 있음)`;
-  return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들려고 해요.
-세계 만들기가 시작되면 단어로만 소통하지만, 지금은 아직 시작 전 — 그냥 첫 인사를 건네는 순간입니다.
-
-${introLine}
-
-말투 가이드: ${tone}
-
-상대에게 건넬 첫 채팅 메시지를 한 문장(최대 두 문장)으로 써주세요.
-
-규칙:
-- 한국어 구어체. 낯선 사람에게 처음 말 거는 톤.
-- 정형 인사 금지: "안녕하세요", "반갑습니다", "저도 처음이에요", ":)", "!!".
-- 자기 이름 소개 금지(이미 화면에 보임).
-- 게임을 설명하거나 "같이 만들어봐요" 같은 표현 금지.
-- 좋은 예: "어떤 세계 좋아해요?" / "뭔가 이상한 데 가고 싶은 날이에요" / "오늘 기분이 어때요, 세계 만들기 전에"
-- 나쁜 예: "안녕하세요! 저도 처음이에요 :)" / "반갑습니다. 함께 세계를 만들어봐요"
-
-JSON으로만 답하세요. 다른 텍스트 금지.
-{ "greeting": "한 문장" }`;
-}
-
 async function tryJsonOnce(model, prompt, requiredKeys) {
   try {
     const res = await fetch(
@@ -1275,30 +1399,8 @@ async function tryJsonOnce(model, prompt, requiredKeys) {
   }
 }
 
-// 첫 인사는 실패 시 FALLBACK_GREETING으로 대체하므로 조용히 실패해도 된다.
-async function fetchGreeting() {
-  const prompt = buildGreetingPrompt();
-  for (const model of MODELS) {
-    const maxAttempts = RETRY_DELAYS.length + 1;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryJsonOnce(model, prompt, ['greeting']);
-      if (result.ok && typeof result.data.greeting === 'string' && result.data.greeting.trim()) {
-        return result.data.greeting.trim();
-      }
-      if (!result.retryable) return null;
-      if (attempt < maxAttempts - 1) {
-        await sleep(RETRY_DELAYS[attempt]);
-      }
-    }
-  }
-  return null;
-}
-
 function buildPrompt(layer, wordsThisTurn, confirm) {
   const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
-  const priorAscii = state.sessions.length
-    ? state.sessions.map(s => `[${s.layer}]\n${s.ascii_art || '(없음)'}`).join('\n\n')
-    : '(아직 없음 — 이번이 첫 레이어)';
   const tone = PERSONAS[state.partnerName]?.tone || '';
   const p = state.playerProfile || { name: '익명', intro: '' };
   const profileLine = p.intro
@@ -1315,22 +1417,22 @@ function buildPrompt(layer, wordsThisTurn, confirm) {
 
   const turnNumber = state.turnCount;
 
-  const confirmInstruction = confirm
-    ? `\n\n지금 플레이어가 "이걸로 할게요"를 눌러 이 레이어를 확정하고 싶어합니다. session_signal은 반드시 agree 또는 disagree로 응답하세요. agree일 때만 narrative/ascii_art/mood를 실제 값으로 채우고, disagree면 narrative는 빈 문자열, ascii_art는 빈 문자열, mood는 null로 두세요.`
-    : '';
-
+  // 확정 턴에서는 partner_words를 클라이언트가 하드코딩하므로 모델에 요청하지 않는다.
+  // 일반 턴은 partner_words + session_signal만, 확정 턴은 session_signal + (agree 시) narrative/mood.
   const schemaForTurn = confirm
     ? `{
-  "partner_words": ["단어", "단어", "단어"],
   "session_signal": "agree | disagree",
   "narrative": "agree일 때만 한국어 1~2문장, 60자 내외. disagree면 빈 문자열.",
-  "ascii_art": "agree일 때만 30자 × 15행(줄바꿈은 \\n). disagree면 빈 문자열.",
   "mood": "agree일 때만 { primary_color, secondary_color, font_tone, keywords }. disagree면 null."
 }`
     : `{
   "partner_words": ["단어", "단어", "단어"],
   "session_signal": "continue | propose_end"
 }`;
+
+  const confirmInstruction = confirm
+    ? `\n\n지금 플레이어가 "이걸로 할게요"를 눌러 이 레이어를 확정하고 싶어합니다. session_signal을 반드시 agree 또는 disagree로 응답하세요. agree일 때만 narrative/mood를 실제 값으로 채우고, disagree면 narrative는 빈 문자열, mood는 null로 두세요. partner_words는 요청하지 않습니다.`
+    : '';
 
   return `당신은 ${state.partnerName}입니다. 온라인에서 막 매칭된 낯선 사람과 함께 작은 가상 세계를 만들고 있어요.
 이 공간의 규칙: 단어로만 소통합니다. 문장은 절대 사용하지 않습니다.
@@ -1342,9 +1444,6 @@ ${profileLine}
 세계는 네 개의 레이어로 쌓입니다: 장소 → 사람 → 사건 → 유물.
 지금까지 확정된 세계(narrative 기록):
 ${priorNarratives || '(아직 없음 — 이번이 첫 레이어)'}
-
-지금까지의 ASCII 분위기:
-${priorAscii}
 
 현재 만들 레이어: ${layer}
 이번 세션의 플레이어 턴 번호(방금 턴 포함): ${turnNumber}
@@ -1360,21 +1459,15 @@ session_signal 판단 기준:
 - propose_end: 2턴 이상 주고받았고 이 레이어가 충분히 구체화됐을 때. 전체 응답의 30% 이내로만 사용할 것.
 - agree: 플레이어가 확정을 요청했을 때(위의 확정 지시) 대부분 동의.
 - disagree: 확정 요청이지만 대화가 1턴뿐이거나 너무 모호할 때. 전체의 20% 이내로만 사용할 것.
-
+${confirm ? '' : `
 partner_words 작성 규칙:
 - 반드시 단어 2~5개. 문장 금지, 조사 달린 긴 구절 금지.
 - 플레이어의 단어를 받아 연상되는 단어로 응답. 말투 가이드를 반영.
 - 좋은 예: ["녹슨", "냄새", "오래된"] / ["조용한", "발소리", "없는"]
-- 나쁜 예: ["무서운 느낌이에요", "정말 좋네요"] ← 문장이라 금지
-${confirm ? `
-agree/disagree일 때의 뉘앙스:
-- agree: 동의·수긍 느낌. 예: ["좋아요", "그거로", "해요"] / ["느낌", "좋은데요"]
-- disagree: 조금 더 하고 싶다는 보류 느낌. 예: ["조금", "더"] / ["아직", "뭔가", "부족"]` : ''}
-
-${confirm ? `agree 시 narrative/ascii_art/mood 작성 규칙:
+- 나쁜 예: ["무서운 느낌이에요", "정말 좋네요"] ← 문장이라 금지`}
+${confirm ? `agree 시 narrative/mood 작성 규칙:
 - narrative: 한국어 1~2문장, 채팅체. "~있어요", "~같아요" 같은 구어. 60자 내외. 플레이어 단어를 담백하게.
-- ascii_art: 정확히 30자 × 15행. 줄바꿈은 '\\n'. 사용 문자 예: ░ ▒ ▓ █ . , - _ / \\ | + * 등. 이전 세션 ASCII가 있으면 그 분위기를 이어 발전시킬 것.
-- mood: primary_color/secondary_color는 레이어 분위기에 맞는 hex. font_tone은 serif | mono | sans | display 중 하나.` : ''}`;
+- mood: primary_color/secondary_color는 레이어 분위기에 맞는 hex. font_tone은 serif | mono | sans | display 중 하나. keywords는 3개 내외의 짧은 한국어 단어(Canvas 배경 패턴 매칭에 사용).` : ''}`;
 }
 
 // 재시도 정책:
@@ -1385,9 +1478,9 @@ ${confirm ? `agree 시 narrative/ascii_art/mood 작성 규칙:
 async function callGemini(layer, words, onStall, confirm) {
   const prompt = buildPrompt(layer, words, confirm);
   let stallIdx = 0;
-  // partner_words와 session_signal은 모든 경우 필수. narrative/mood/ascii_art는
-  // confirm=true && session_signal==='agree' 일 때만 의미 있으므로, 존재 여부는 호출부에서 검증.
-  const required = ['partner_words', 'session_signal'];
+  // 일반 턴은 partner_words + session_signal, 확정 턴은 session_signal만 필수
+  // (확정 턴의 파트너 단어는 클라이언트가 하드코딩하므로 모델에 요청하지 않음).
+  const required = confirm ? ['session_signal'] : ['partner_words', 'session_signal'];
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -1493,6 +1586,7 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
   const hintEl = document.getElementById('input-hint');
   if (inputArea) inputArea.style.display = '';
   if (hintEl) hintEl.style.display = '';
+  if (questHint) { questHint.style.display = ''; questHint.textContent = ''; }
   wordInput.disabled = false;
 
   startMatching();
