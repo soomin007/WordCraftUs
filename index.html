@@ -226,7 +226,8 @@
     font-family: 'JetBrains Mono', monospace;
     margin-bottom: 1rem;
   }
-  .typing-indicator .dots::after {
+  .typing-indicator .dots::after,
+  .dots-inline::after {
     content: '.';
     animation: dots 1.2s steps(4, end) infinite;
   }
@@ -261,6 +262,21 @@
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
     min-height: 1em;
+  }
+
+  .session-end-choice {
+    padding: 20px 40px;
+    border-top: 1px solid #222;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+  }
+  .session-end-choice.visible {
+    opacity: 1;
+    transform: translateY(0);
   }
 
   /* --- 분기 화면 --- */
@@ -363,6 +379,16 @@
   </div>
 </section>
 
+<!-- 소개 입력 화면 -->
+<section id="intro-screen" class="screen center">
+  <div class="start-form">
+    <div class="hint" style="margin-bottom: 0.5rem;">상대에게 보여질 내 소개를 입력해주세요</div>
+    <input type="text" id="intro-name" placeholder="이름 또는 별명" maxlength="10" autocomplete="off">
+    <input type="text" id="intro-text" placeholder="어떤 세계를 좋아하나요?" maxlength="40" autocomplete="off">
+    <button id="intro-done">완료</button>
+  </div>
+</section>
+
 <!-- 매칭 화면 -->
 <section id="matching-screen" class="screen center">
   <div class="matching">
@@ -439,7 +465,24 @@
 // =============== 상수 ===============
 const PARTNER_NAMES = ['Kai', 'Echo', 'Miro', 'Lena', 'Sable', 'Ren'];
 const LAYERS = ['장소', '사람', '사건', '유물'];
-const PARTNER_FIRST_MSG = '안녕하세요. 저도 처음이에요. 우리 같이 세계를 하나 만들어볼까요? 먼저 — 어떤 장소를 만들고 싶어요? 떠오르는 단어를 몇 개 던져줘요.';
+// 파트너별 말투 차이. 성격은 최소한으로 유지해서 NPC 티가 나지 않게 한다.
+const PERSONAS = {
+  Kai:   { tone: "담담하고 짧게. 감탄 없음. 건조한 관찰자." },
+  Echo:  { tone: "질문을 자주 던짐. '그건 왜 골랐어요?' 같은 식." },
+  Miro:  { tone: "약간 엉뚱한 연상. '어딘가 익숙한 느낌'처럼 흘림." },
+  Sable: { tone: "느리고 신중하게. 한 박자 뒤에 반응하는 느낌." },
+  Lena:  { tone: "따뜻하고 공감. '저도 그런 곳 좋아해요' 스타일." },
+  Ren:   { tone: "건조하고 관찰자적. 묘사가 구체적이고 짧음." }
+};
+const PERSONA_TYPING = {
+  Kai:   45,
+  Echo:  35,
+  Miro:  38,
+  Sable: 55,
+  Lena:  40,
+  Ren:   30
+};
+const FALLBACK_GREETING = '어떤 세계 좋아해요?';
 const NEXT_PROMPTS = [
   '좋아요. 이 장소가 생겼어요. 여기에 누가 살고 있을까요?',
   '그 사람이 보여요. 이 장소에서 어떤 일이 있었을까요?',
@@ -473,6 +516,8 @@ const STALL_MESSAGES = [
 let state = {
   apiKey: '',
   partnerName: 'Kai',
+  playerProfile: { name: '익명', intro: '' },
+  firstGreeting: '',
   currentLayerIndex: 0,
   sessions: [],
   createdAt: null
@@ -488,7 +533,8 @@ function showScreen(id) {
 // =============== 유틸: 타자기 효과 ===============
 // 사람의 타이핑을 흉내내기 위해 글자당 속도에 ±편차를 더하고,
 // 구두점 뒤에는 생각하는 듯 추가 멈춤을 준다.
-function typewriter(el, text, speed = TYPEWRITER_SPEED) {
+function typewriter(el, text, speed) {
+  const resolvedSpeed = speed ?? PERSONA_TYPING[state.partnerName] ?? TYPEWRITER_SPEED;
   return new Promise(resolve => {
     el.textContent = '';
     let i = 0;
@@ -496,7 +542,7 @@ function typewriter(el, text, speed = TYPEWRITER_SPEED) {
       if (i >= text.length) { resolve(); return; }
       const ch = text[i++];
       el.textContent += ch;
-      let delay = speed + (Math.random() * 2 - 1) * TYPEWRITER_VARIANCE;
+      let delay = resolvedSpeed + (Math.random() * 2 - 1) * TYPEWRITER_VARIANCE;
       if (PAUSE_PUNCT_RE.test(ch)) delay += PUNCTUATION_PAUSE_MS;
       setTimeout(tick, Math.max(10, delay));
     };
@@ -541,7 +587,30 @@ startBtn.addEventListener('click', async () => {
     return;
   }
   state.apiKey = key;
-  await startMatching();
+  showScreen('intro-screen');
+  document.getElementById('intro-name').focus();
+});
+
+// =============== 소개 입력 화면 ===============
+const introNameInput = document.getElementById('intro-name');
+const introTextInput = document.getElementById('intro-text');
+const introDoneBtn = document.getElementById('intro-done');
+
+function finishIntro() {
+  const name = introNameInput.value.trim() || '익명';
+  const intro = introTextInput.value.trim();
+  state.playerProfile = { name, intro };
+  startMatching();
+}
+
+introDoneBtn.addEventListener('click', finishIntro);
+[introNameInput, introTextInput].forEach(el => {
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finishIntro();
+    }
+  });
 });
 
 async function validateApiKey(key) {
@@ -592,8 +661,16 @@ async function introducePartner() {
   const msgEl = document.getElementById('partner-first-msg');
   const btn = document.getElementById('partner-continue');
   btn.style.display = 'none';
+
+  // 첫 인사 생성 동안에도 '사람이 타이핑하는 중'으로 보이게 한다.
+  msgEl.innerHTML = `<span style="color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;">${state.partnerName}가 입력 중<span class="dots-inline"></span></span>`;
   await sleep(400);
-  await typewriter(msgEl, PARTNER_FIRST_MSG);
+
+  const greeting = await fetchGreeting();
+  state.firstGreeting = greeting || FALLBACK_GREETING;
+
+  msgEl.innerHTML = '';
+  await typewriter(msgEl, state.firstGreeting);
   btn.style.display = 'inline-block';
 }
 
@@ -618,7 +695,7 @@ function enterSession(layerIndex, firstEntry) {
   if (firstEntry) {
     chatPanel.innerHTML = '';
     renderWorld();
-    addPartnerMsg(PARTNER_FIRST_MSG, /*typed=*/false);
+    addPartnerMsg(state.firstGreeting || FALLBACK_GREETING, /*typed=*/false);
   } else {
     const prompt = NEXT_PROMPTS[layerIndex - 1];
     addPartnerMsg(prompt, /*typed=*/true);
@@ -779,36 +856,137 @@ async function submitWords() {
   renderWorld();
   await addPartnerMsg(result.partner_message, /*typed=*/true);
 
-  await sleep(1200);
-  goToBranch();
+  await sleep(1500);
+  await showSessionEndChoice();
 }
 
-function goToBranch() {
-  showScreen('branch-screen');
-  const continueBtn = document.getElementById('continue-btn');
-  if (state.currentLayerIndex >= LAYERS.length - 1) {
-    continueBtn.style.display = 'none';
-  } else {
-    continueBtn.style.display = 'inline-block';
-  }
-}
+// 세션 종료 시 별도 화면으로 전환하지 않고, 세션 화면 하단의 입력 영역을
+// '계속 만들기 / 공유하기' 버튼으로 교체해 맥락이 끊기지 않도록 한다.
+async function showSessionEndChoice() {
+  const inputArea = document.querySelector('.input-area');
+  const hintEl = document.getElementById('input-hint');
+  inputArea.style.display = 'none';
+  hintEl.style.display = 'none';
 
-document.getElementById('continue-btn').addEventListener('click', () => {
-  const next = state.currentLayerIndex + 1;
-  if (next < LAYERS.length) {
-    wordInput.disabled = false;
-    enterSession(next, /*firstEntry=*/false);
+  const isLast = state.currentLayerIndex >= LAYERS.length - 1;
+  const promptText = isLast ? '다 만들었네요.' : '계속할까요?';
+  await addPartnerMsg(promptText, /*typed=*/true);
+
+  const existing = document.getElementById('session-end-choice');
+  if (existing) existing.remove();
+
+  const area = document.createElement('div');
+  area.id = 'session-end-choice';
+  area.className = 'session-end-choice';
+
+  if (!isLast) {
+    const contBtn = document.createElement('button');
+    contBtn.textContent = '계속 만들기';
+    contBtn.addEventListener('click', () => {
+      area.remove();
+      inputArea.style.display = '';
+      hintEl.style.display = '';
+      wordInput.disabled = false;
+      enterSession(state.currentLayerIndex + 1, /*firstEntry=*/false);
+    });
+    area.appendChild(contBtn);
   }
-});
-document.getElementById('share-btn').addEventListener('click', () => {
-  showTwist();
-});
+
+  const shareBtn = document.createElement('button');
+  shareBtn.textContent = '이 세계 공유하기';
+  shareBtn.addEventListener('click', () => showTwist());
+  area.appendChild(shareBtn);
+
+  inputArea.parentNode.insertBefore(area, inputArea);
+  requestAnimationFrame(() => area.classList.add('visible'));
+}
 
 // =============== Gemini API ===============
+function buildGreetingPrompt() {
+  const p = state.playerProfile || { name: '익명', intro: '' };
+  const tone = PERSONAS[state.partnerName]?.tone || '';
+  const introLine = p.intro
+    ? `The player's name is ${p.name}. Their intro: "${p.intro}". You may subtly reference this if natural, but don't force it.`
+    : `The player's name is ${p.name}. They didn't write an intro.`;
+  return `You are ${state.partnerName}, a stranger who just got matched online with another person to build a small fictional world together. You are sending your VERY FIRST chat message to them right now — like two online strangers who just matched to play a casual worldbuilding game.
+
+${introLine}
+
+Tone guidance: ${tone}
+
+Rules for this greeting:
+- Korean. One short sentence, two max. Colloquial chat style.
+- Sound like a real person typing to a stranger, not a host or a game master.
+- DO NOT use formulaic openings: "안녕하세요", "반갑습니다", "저도 처음이에요", ":)", "!!".
+- DO NOT introduce yourself by name — they already see your name on screen.
+- DO NOT explain the game or say "같이 만들어봐요" type phrases.
+- Good examples: "어떤 세계 좋아해요?", "뭔가 이상한 데 가고 싶은 날이에요", "오늘 기분이 어때요, 세계 만들기 전에".
+- Bad examples: "안녕하세요! 저도 처음이에요 :)", "반갑습니다. 함께 세계를 만들어봐요".
+
+Respond ONLY in JSON:
+{ "greeting": "한 문장" }
+Do not include any text outside the JSON.`;
+}
+
+async function tryJsonOnce(model, prompt, requiredKeys) {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${state.apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        })
+      }
+    );
+    if (!res.ok) {
+      return { ok: false, retryable: RETRYABLE_STATUS.includes(res.status), status: res.status };
+    }
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return { ok: false, retryable: true };
+    const parsed = JSON.parse(text);
+    for (const k of requiredKeys) {
+      if (!parsed[k]) return { ok: false, retryable: true };
+    }
+    return { ok: true, data: parsed };
+  } catch (err) {
+    return { ok: false, retryable: true };
+  }
+}
+
+// 첫 인사는 재시도 실패 시 FALLBACK_GREETING으로 대체하므로 조용히 실패해도 된다.
+async function fetchGreeting() {
+  const prompt = buildGreetingPrompt();
+  for (const model of MODELS) {
+    const maxAttempts = RETRY_DELAYS.length + 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const result = await tryJsonOnce(model, prompt, ['greeting']);
+      if (result.ok) return result.data.greeting;
+      if (!result.retryable) return null;
+      if (attempt < maxAttempts - 1) {
+        await sleep(RETRY_DELAYS[attempt]);
+      }
+    }
+  }
+  return null;
+}
+
 function buildPrompt(layer, words) {
   const priorNarratives = state.sessions.map(s => `[${s.layer}] ${s.narrative}`).join('\n');
+  const tone = PERSONAS[state.partnerName]?.tone || '';
+  const p = state.playerProfile || { name: '익명', intro: '' };
+  const profileLine = p.intro
+    ? `The player's name is ${p.name}. Their intro: "${p.intro}". You may subtly reference this if natural, but don't force it.`
+    : `The player's name is ${p.name}.`;
   return `You are ${state.partnerName}, chatting with a friend online to build a small fictional world together.
 You are NOT a narrator or a novelist. You are a regular person typing in a chat window.
+
+${profileLine}
+
+Tone guidance: ${tone}
 
 CRITICAL tone rules for Korean output:
 - Write like a friend texting. Short. Casual. Natural.
@@ -847,36 +1025,6 @@ Respond ONLY in JSON:
 Do not include any text outside the JSON.`;
 }
 
-async function tryGeminiOnce(model, prompt) {
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${state.apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
-        })
-      }
-    );
-    if (!res.ok) {
-      return { ok: false, retryable: RETRYABLE_STATUS.includes(res.status), status: res.status };
-    }
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return { ok: false, retryable: true };
-    const parsed = JSON.parse(text);
-    if (!parsed.narrative || !parsed.partner_message || !parsed.mood) {
-      return { ok: false, retryable: true };
-    }
-    return { ok: true, data: parsed };
-  } catch (err) {
-    // 네트워크 오류/파싱 오류 → 일시적으로 간주하고 재시도
-    return { ok: false, retryable: true };
-  }
-}
-
 // 재시도 정책:
 // - 각 모델마다 초기 1회 + RETRY_DELAYS 길이만큼 재시도 (총 4회).
 // - 일시 오류(503 등)에만 재시도. 401/400 같은 영구 오류는 즉시 종료.
@@ -888,7 +1036,7 @@ async function callGemini(layer, words, onStall) {
   for (const model of MODELS) {
     const maxAttempts = RETRY_DELAYS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const result = await tryGeminiOnce(model, prompt);
+      const result = await tryJsonOnce(model, prompt, ['narrative', 'partner_message', 'mood']);
       if (result.ok) return result.data;
       if (!result.retryable) return null;
       if (attempt < maxAttempts - 1) {
@@ -967,6 +1115,8 @@ document.getElementById('new-world-btn').addEventListener('click', () => {
   state = {
     apiKey: state.apiKey,
     partnerName: 'Kai',
+    playerProfile: state.playerProfile || { name: '익명', intro: '' },
+    firstGreeting: '',
     currentLayerIndex: 0,
     sessions: [],
     createdAt: null
