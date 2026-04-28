@@ -28,7 +28,10 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          printf 'const GEMINI_API_KEY = "%s";\n' "$GEMINI_API_KEY" > config.js
+          {
+            printf 'const GEMINI_API_KEY = "%s";\n' "$GEMINI_API_KEY"
+            printf 'const MOCK_MODE = false;\n'
+          } > config.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

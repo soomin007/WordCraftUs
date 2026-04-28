@@ -26,6 +26,7 @@ session_logs/         ← 세션 작업 로그 (아래 규칙 참고)
 - 배포 시 키는 GitHub repo secret `GEMINI_API_KEY`에서 Actions가 주입한다.
 - 키를 교체할 때는 repo secret만 업데이트하면 됨. 코드 수정 불필요.
 - 로컬 개발 시에만 `config.js`에 실제 키를 넣는다.
+- **Mock 모드**: `config.js`의 `MOCK_MODE = true`로 두면 API 호출 없이 가짜 응답으로 UX를 테스트할 수 있다. 로컬 전용 플래그이며, `deploy.yml`이 배포 시 항상 `MOCK_MODE = false`로 고정해 주입하므로 라이브에는 영향 없음.
 
 ## 코드 컨벤션
 
