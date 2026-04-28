@@ -1478,34 +1478,80 @@ ${confirm ? `agree 시 narrative/mood 작성 규칙:
 // =============== Mock 응답 ===============
 // MOCK_MODE = true일 때 API 호출 없이 callGemini가 즉시 반환하는 가짜 응답.
 // 결제/네트워크 없이 UX 흐름(타이핑 → 단어 → 확정 → mood)을 빠르게 테스트하기 위한 용도.
+const MOCK_WORDS = {
+  '장소': [
+    ["낡은", "빛", "먼지"],
+    ["안쪽", "깊은", "냄새"],
+    ["좁은", "익숙한", "조용한"],
+    ["젖은", "골목", "그림자"],
+    ["흐린", "창", "오후"],
+    ["버려진", "계단", "이끼"],
+    ["넓은", "바닥", "발소리"],
+  ],
+  '사람': [
+    ["혼자", "기다리는", "누군가"],
+    ["낯선", "눈빛", "조용한"],
+    ["오래된", "손", "따뜻한"],
+    ["젊은", "웃음", "어색한"],
+    ["등을", "돌린", "사람"],
+    ["말없이", "건네는", "물건"],
+    ["잠든", "얼굴", "흔적"],
+  ],
+  '사건': [
+    ["사라진", "흔적", "하나"],
+    ["멈춘", "시간", "그날"],
+    ["남겨진", "말", "끝에"],
+    ["갑작스런", "정전", "비명"],
+    ["문이", "닫혔다", "혼자서"],
+    ["오래", "기다린", "편지"],
+    ["발견된", "이름", "낯선"],
+  ],
+  '유물': [
+    ["깨진", "조각", "오래된"],
+    ["접힌", "종이", "빛바랜"],
+    ["무거운", "돌", "이름없는"],
+    ["녹슨", "열쇠", "맞지않는"],
+    ["빈", "병", "안쪽에"],
+    ["흙묻은", "사진", "한장"],
+    ["찢어진", "지도", "표시"],
+  ],
+};
+
+const MOCK_AGREE = [["확인", "진행"], ["동의", "계속"], ["좋아요", "가죠"], ["ㅇㅋ", "다음"]];
+const MOCK_DISAGREE = [["조금", "더"], ["아직", "이른"], ["한번", "더"]];
+
+const MOCK_MOODS = [
+  { primary_color: "#2C3E50", secondary_color: "#ECF0F1", font_tone: "serif",  keywords: ["고요한", "어두운", "낡은"] },
+  { primary_color: "#4A3728", secondary_color: "#F5E6D3", font_tone: "display", keywords: ["따뜻한", "오래된", "먼지"] },
+  { primary_color: "#1A2F1A", secondary_color: "#D4E8D4", font_tone: "mono",   keywords: ["숲", "깊은", "잎"] },
+  { primary_color: "#1C1C3A", secondary_color: "#C8C8FF", font_tone: "serif",  keywords: ["밤", "별", "조용한"] },
+  { primary_color: "#3A1C1C", secondary_color: "#FFD8D8", font_tone: "display", keywords: ["불", "붉은", "뜨거운"] },
+  { primary_color: "#1A3A4A", secondary_color: "#D8F0FF", font_tone: "mono",   keywords: ["바다", "물결", "젖은"] },
+];
+
+// 직전에 뽑은 인덱스를 키별로 기억해, 같은 옵션을 연속으로 뽑지 않도록 한다.
+// (Math.random이 실제로 0/1/2를 균등하게 주더라도, 풀이 작으면 같은 게 반복되는 게 사람 눈에 잘 띈다.)
+const _mockLastIdx = {};
+function pickAvoidLast(arr, key) {
+  if (arr.length <= 1) return arr[0];
+  const last = _mockLastIdx[key];
+  let idx = Math.floor(Math.random() * arr.length);
+  if (idx === last) idx = (idx + 1) % arr.length;
+  _mockLastIdx[key] = idx;
+  return arr[idx];
+}
+
 function getMockResponse(layer, confirm) {
-  const MOCK_WORDS = {
-    '장소': [["낡은", "빛", "먼지"], ["안쪽", "깊은", "냄새"], ["좁은", "익숙한", "조용한"]],
-    '사람': [["혼자", "기다리는", "누군가"], ["낯선", "눈빛", "조용한"], ["오래된", "손", "따뜻한"]],
-    '사건': [["사라진", "흔적", "하나"], ["멈춘", "시간", "그날"], ["남겨진", "말", "끝에"]],
-    '유물': [["깨진", "조각", "오래된"], ["접힌", "종이", "빛바랜"], ["무거운", "돌", "이름없는"]],
-  };
-
-  const MOCK_AGREE = [["확인", "진행"], ["동의", "계속"], ["ㅇㅋ", "다음"]];
-  const MOCK_DISAGREE = [["조금", "더"], ["아직", "이른"], ["한번", "더"]];
-
-  const MOCK_MOODS = [
-    { primary_color: "#2C3E50", secondary_color: "#ECF0F1", font_tone: "serif", keywords: ["고요한", "어두운", "낡은"] },
-    { primary_color: "#4A3728", secondary_color: "#F5E6D3", font_tone: "display", keywords: ["따뜻한", "오래된", "먼지"] },
-    { primary_color: "#1A2F1A", secondary_color: "#D4E8D4", font_tone: "mono", keywords: ["숲", "깊은", "潮湿"] },
-    { primary_color: "#1C1C3A", secondary_color: "#C8C8FF", font_tone: "serif", keywords: ["밤", "별", "조용한"] },
-  ];
-
-  const words = MOCK_WORDS[layer] ?? MOCK_WORDS['장소'];
-  const partnerWords = words[Math.floor(Math.random() * words.length)];
-  const mood = MOCK_MOODS[Math.floor(Math.random() * MOCK_MOODS.length)];
+  const pool = MOCK_WORDS[layer] ?? MOCK_WORDS['장소'];
+  const partnerWords = pickAvoidLast(pool, `words:${layer}`);
+  const mood = pickAvoidLast(MOCK_MOODS, 'mood');
 
   if (confirm) {
     const agree = Math.random() < 0.8;
     return {
       partner_words: agree
-        ? MOCK_AGREE[Math.floor(Math.random() * MOCK_AGREE.length)]
-        : MOCK_DISAGREE[Math.floor(Math.random() * MOCK_DISAGREE.length)],
+        ? pickAvoidLast(MOCK_AGREE, 'agree')
+        : pickAvoidLast(MOCK_DISAGREE, 'disagree'),
       narrative: `${layer}에 대한 mock 묘사입니다. 실제 배포 시 Gemini가 생성합니다.`,
       session_signal: agree ? 'agree' : 'disagree',
       mood,
